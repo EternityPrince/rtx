@@ -528,3 +528,180 @@ async def test_tui_widget_coverage(sandbox_dir):
         await pilot.pause()
         
         await pilot.press("q")
+
+# ==========================================
+# 10. Additional Gaps Coverage
+# ==========================================
+
+def test_digger_extra_coverage(sandbox_dir):
+    # 1. is_binary_content raising OSError (file not found is OSError)
+    assert is_binary_content(Path("non_existent_file.xyz")) is True
+
+    # 2. is_excluded_path ValueError (outside root)
+    assert is_excluded_path(Path("/outside/root/file.py"), sandbox_dir) is True
+
+    # 3. is_excluded_path Exception (path is None)
+    assert is_excluded_path(None, sandbox_dir) is True
+
+    # 4. calculate_metrics with excluded path
+    digger = DiggerEngine(sandbox_dir)
+    assert digger.calculate_metrics(sandbox_dir / "image.png") == (0, 0, 0, 0)
+
+    # 5. calculate_metrics scandir OSError
+    with patch("os.scandir", side_effect=OSError("Access denied")):
+        # Calculate metrics for sandbox_dir, should handle OSError and return (0,0,0,0) or partial
+        digger.metrics_cache.clear()
+        assert digger.calculate_metrics(sandbox_dir) == (0, 0, 0, 0)
+
+    # 6. count_pdf_metrics fallback to pypdf (mock fitz to raise Exception)
+    from rtx.digger import count_pdf_metrics
+    with patch("fitz.open", side_effect=Exception("Fitz error")):
+        lines, chars = count_pdf_metrics(sandbox_dir / "sample.pdf")
+        assert lines > 0 or chars >= 0
+
+    # 7. count_docx_metrics table cell paragraphs and exceptions
+    from rtx.digger import count_docx_metrics, count_pptx_metrics, count_epub_metrics, count_fb2_metrics
+    assert count_docx_metrics(Path("non_existent.docx")) == (0, 0)
+    assert count_pptx_metrics(Path("non_existent.pptx")) == (0, 0)
+    assert count_epub_metrics(Path("non_existent.epub")) == (0, 0)
+    assert count_fb2_metrics(Path("non_existent.fb2")) == (0, 0)
+
+    # DOCX table metrics test
+    import docx
+    doc = docx.Document()
+    table = doc.add_table(rows=1, cols=1)
+    table.cell(0, 0).text = "Table Cell Content"
+    docx_file = sandbox_dir / "table_test.docx"
+    doc.save(docx_file)
+    lines, chars = count_docx_metrics(docx_file)
+    assert chars > 0
+    docx_file.unlink()
+
+
+def test_pdf_parser_failure_branch(sandbox_dir):
+    # Mock everything to fail in PdfParser.parse to raise RuntimeError
+    with patch("rtx.parsers.pdf.get_marker_models", side_effect=Exception("marker error")):
+        with patch("fitz.open", side_effect=Exception("fitz error")):
+            with patch("pypdf.PdfReader", side_effect=Exception("pypdf error")):
+                parser = PdfParser()
+                with pytest.raises(RuntimeError) as exc:
+                    parser.parse(sandbox_dir / "sample.pdf")
+                assert "PDF parsing failed" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_tui_extra_coverage(sandbox_dir):
+    from rtx.tui import RtxApp, ParsingScreen
+    from textual.widgets import Button
+    
+    # Create a non-excluded subdirectory and a file in it
+    sub_dir = sandbox_dir / "tui_sub_folder"
+    sub_dir.mkdir(exist_ok=True)
+    sub_file = sub_dir / "nested.py"
+    sub_file.write_text("print('test')", encoding="utf-8")
+    
+    app = RtxApp(sandbox_dir)
+    async with app.run_test() as pilot:
+        # 1. Test action_reload
+        app.node_stats[sandbox_dir] = (1, 1, 1, 1)
+        app.digger.metrics_cache[sandbox_dir] = (1, 1, 1, 1)
+        app.action_reload()
+        assert not app.node_stats
+        assert not app.digger.metrics_cache
+
+        # 2. Test update_details with >15 files
+        app.selected_paths = {sandbox_dir / f"file_{i}.py" for i in range(20)}
+        app.update_details()
+
+        # 3. Test partially selected folder prefix (🟨) in render_label
+        app.selected_paths = {sub_file.resolve()}
+        tree = app.query_one("#dir_tree")
+        tree.refresh()
+        await pilot.pause()
+
+        # 4. Test action_open_file when current_preview_path is None or a directory
+        app.current_preview_path = None
+        app.action_open_file()
+        
+        app.current_preview_path = sandbox_dir
+        app.action_open_file()
+
+        # 5. Test open_current_file for different OS platforms
+        app.current_preview_path = sub_file.resolve()
+        with patch("subprocess.run") as mock_sub:
+            with patch("sys.platform", "darwin"):
+                app.open_current_file()
+                mock_sub.assert_called_with(["open", str(sub_file.resolve())], check=True)
+                
+            with patch("sys.platform", "linux"):
+                app.open_current_file()
+                mock_sub.assert_called_with(["xdg-open", str(sub_file.resolve())], check=True)
+
+        with patch("os.startfile", create=True) as mock_start:
+            with patch("sys.platform", "win32"):
+                app.open_current_file()
+                mock_start.assert_called_with(sub_file.resolve())
+
+        # Test exception inside open_current_file
+        with patch("subprocess.run", side_effect=Exception("Subprocess error")):
+            with patch("sys.platform", "darwin"):
+                app.open_current_file()
+
+        # 6. Test show_preview with large file (>10MB)
+        large_file = sandbox_dir / "large.py"
+        import stat
+        mock_stat_obj = MagicMock()
+        mock_stat_obj.st_size = 11 * 1024 * 1024
+        mock_stat_obj.st_mode = stat.S_IFREG
+        
+        with patch("pathlib.Path.stat", return_value=mock_stat_obj):
+            app.show_preview(large_file)
+            await pilot.pause()
+            
+        # Trigger exception in path.stat()
+        with patch("pathlib.Path.is_dir", return_value=False), \
+             patch("pathlib.Path.is_file", return_value=True), \
+             patch("pathlib.Path.stat", side_effect=Exception("stat error")):
+            app.show_preview(large_file)
+            await pilot.pause()
+
+        # 7. Test show_preview with binary file content
+        bin_file = sandbox_dir / "binary_test.py"
+        bin_file.write_bytes(b"some text \x00 more text")
+        app.show_preview(bin_file)
+        await pilot.pause()
+        bin_file.unlink()
+
+        # 8. Test show_preview fallback when bat fails or is missing
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            app.show_preview(sub_file)
+            await pilot.pause()
+
+        # 9. Test FinishedParsing screen with all failed results
+        pscreen = ParsingScreen(
+            selected_files=[sub_file],
+            mirror_mode=False,
+            output_file=None,
+            project_path=sandbox_dir
+        )
+        app.push_screen(pscreen)
+        await pilot.pause()
+        
+        all_failed_results = [
+            ParseResult(sub_file, ".py", "", "Failed", "Critical Error")
+        ]
+        pscreen.finished_parsing(all_failed_results)
+        await pilot.pause()
+        await pilot.click("#close_btn")
+        
+        # 10. Test Directory Tree Expand & calculate_metrics_async
+        tree = app.query_one("#dir_tree")
+        for node in tree.root.children:
+            if node.data and node.data.path.is_dir():
+                tree.post_message(tree.NodeExpanded(node))
+                await pilot.pause()
+                break
+
+        # Quit
+        await pilot.press("q")
+

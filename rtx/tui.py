@@ -207,6 +207,7 @@ class RtxApp(App):
         ("ctrl+p", "start_parsing", "Parse Selected"),
         ("p", "start_parsing", "Parse"),
         ("o", "open_file", "Open File"),
+        ("r", "reload", "Reload"),
     ]
     
     CSS = """
@@ -460,6 +461,13 @@ class RtxApp(App):
         self.mirror_mode = not self.mirror_mode
         self.update_details()
         self.notify(f"Mode changed: {'Mirroring' if self.mirror_mode else 'Single File (Stream)'}")
+
+    def action_reload(self) -> None:
+        self.node_stats.clear()
+        self.digger.metrics_cache.clear()
+        tree = self.query_one(RtxDirectoryTree)
+        tree.reload()
+        self.notify("Workspace reloaded and caches cleared.")
 
     @on(Button.Pressed, "#open_file_btn")
     def handle_open_file_pressed(self) -> None:
