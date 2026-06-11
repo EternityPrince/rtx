@@ -85,7 +85,7 @@ class ParsingScreen(ModalScreen):
     @work(thread=True)
     def run_parsing(self) -> None:
         def progress(path: Path, current: int, total: int):
-            self.call_from_thread(self.update_progress, path, current, total)
+            self.app.call_from_thread(self.update_progress, path, current, total)
             
         results = run_parser_pipeline(self.selected_files, progress_callback=progress)
         
@@ -97,7 +97,7 @@ class ParsingScreen(ModalScreen):
             from rtx.writer import write_stream
             write_stream(results, self.project_path, output_file=self.output_file)
             
-        self.call_from_thread(self.finished_parsing, results)
+        self.app.call_from_thread(self.finished_parsing, results)
 
     def update_progress(self, path: Path, current: int, total: int):
         rel_path = path.relative_to(self.project_path) if path.is_relative_to(self.project_path) else path
@@ -113,7 +113,10 @@ class ParsingScreen(ModalScreen):
 
     def finished_parsing(self, results: List[ParseResult]):
         self.query_one("#parsing_log").add_class("hidden")
-        self.query_one("#parsing_progress").update("[bold green]Парсинг завершен![/bold green]")
+        if not self.mirror_mode and not self.output_file:
+            self.query_one("#parsing_progress").update("[bold green]Парсинг завершен! Результаты скопированы в буфер обмена.[/bold green]")
+        else:
+            self.query_one("#parsing_progress").update("[bold green]Парсинг завершен![/bold green]")
         
         summary_panel = self.query_one("#parsing_summary", Static)
         summary_panel.remove_class("hidden")
@@ -263,7 +266,7 @@ class RtxApp(App):
                     Label("Выходной файл (Режим A):"),
                     Input(
                         value=str(self.output_file) if self.output_file else "",
-                        placeholder="Оставьте пустым для stdout",
+                        placeholder="Пусто для копирования в буфер обмена",
                         id="output_path_input"
                     ),
                     id="input_container"
@@ -280,7 +283,10 @@ class RtxApp(App):
         details = self.query_one("#details_panel", Static)
         
         mode_str = "[bold magenta]Режим B: Зеркалирование (.rtx/)[/bold magenta]" if self.mirror_mode else "[bold cyan]Режим A: Единый файл (Stream)[/bold cyan]"
-        output_str = f"[green]{self.output_file}[/green]" if self.output_file else "[dim]stdout[/dim]"
+        if self.mirror_mode:
+            output_str = "[dim]Не применимо (Зеркалирование)[/dim]"
+        else:
+            output_str = f"[green]{self.output_file}[/green]" if self.output_file else "[bold yellow]Буфер обмена (Clipboard)[/bold yellow]"
         
         files_count = len([p for p in self.selected_paths if p.is_file()])
         dirs_count = len([p for p in self.selected_paths if p.is_dir()])

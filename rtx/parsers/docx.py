@@ -1,6 +1,29 @@
 from pathlib import Path
 from rtx.parsers.base import BaseParser
 
+def iter_block_items(parent):
+    """
+    Yield each paragraph and table child within `parent`, in document order.
+    Each returned value is an instance of either Paragraph or Table.
+    """
+    from docx.document import Document
+    from docx.text.paragraph import Paragraph
+    from docx.table import Table
+
+    if isinstance(parent, Document):
+        parent_elm = parent.element.body
+    elif isinstance(parent, Table):
+        # We could iterate inside cell but let's stick to root level items for simplicity
+        parent_elm = parent._tbl
+    else:
+        raise TypeError("Unsupported parent element")
+
+    for child in parent_elm.iterchildren():
+        if child.tag.endswith('p'):
+            yield Paragraph(child, parent)
+        elif child.tag.endswith('tbl'):
+            yield Table(child, parent)
+
 class DocxParser(BaseParser):
     def parse(self, path: Path) -> str:
         # Lazy import to avoid loading heavy modules on startup
@@ -9,37 +32,8 @@ class DocxParser(BaseParser):
         doc = docx.Document(path)
         markdown_lines = []
         
-        # We will parse body elements sequentially.
-        # doc.paragraphs only contains paragraphs, doc.tables only contains tables.
-        # But we want to maintain the relative order between paragraphs and tables.
-        # The most robust way to do this in python-docx is to iterate over elements in doc.element.body
-        # and match them, or use a block-level iteration.
-        # Let's write a simple iterator that yields blocks.
-        
-        from docx.oxml.ns import qn
-        from docx.oxml import OxmlElement
         from docx.text.paragraph import Paragraph
         from docx.table import Table
-
-        def iter_block_items(parent):
-            """
-            Yield each paragraph and table child within `parent`, in document order.
-            Each returned value is an instance of either Paragraph or Table.
-            """
-            from docx.document import Document
-            if isinstance(parent, Document):
-                parent_elm = parent.element.body
-            elif isinstance(parent, Table):
-                # We could iterate inside cell but let's stick to root level items for simplicity
-                parent_elm = parent._tbl
-            else:
-                raise TypeError("Unsupported parent element")
-
-            for child in parent_elm.iterchildren():
-                if child.tag.endswith('p'):
-                    yield Paragraph(child, parent)
-                elif child.tag.endswith('tbl'):
-                    yield Table(child, parent)
 
         for item in iter_block_items(doc):
             if isinstance(item, Paragraph):

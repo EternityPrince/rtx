@@ -98,7 +98,7 @@ def write_mirror(results: List[ParseResult], root_path: Path):
         try:
             rel_path = res.path.relative_to(root_path)
         except ValueError:
-            rel_path = res.path
+            rel_path = Path(res.path.name)
             
         # Append .md to the filename to preserve original extension and avoid collisions
         target_path = rtx_root / rel_path.with_name(rel_path.name + ".md")

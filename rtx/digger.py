@@ -67,7 +67,7 @@ def is_excluded_path(path: Path, root_path: Path) -> bool:
         try:
             rel_path = path.relative_to(root_path)
         except ValueError:
-            rel_path = path  # fallback
+            return True  # Exclude paths outside the project root
 
         for part in rel_path.parts:
             # Skip hidden folders/files starting with '.'
