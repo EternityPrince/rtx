@@ -35,10 +35,7 @@ class CodeParser(BaseParser):
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
             
-        # Determine backtick fence length to avoid collision
-        fence = "```"
-        if "```" in content:
-            # If the code itself contains triple backticks, use 4 backticks for fence
-            fence = "````"
+        from rtx.parsers.pdf import get_safe_markdown_fence
+        fence = get_safe_markdown_fence(content)
             
         return f"{fence}{lang}\n{content}\n{fence}"

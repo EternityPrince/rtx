@@ -1,4 +1,5 @@
 import asyncio
+import subprocess
 from pathlib import Path
 from typing import List, Dict, Tuple, Set, Optional, Iterable
 from rich.text import Text
@@ -15,6 +16,18 @@ from textual.worker import get_current_worker
 
 from rtx.digger import DiggerEngine, format_bytes
 from rtx.pipeline import run_parser_pipeline, ParseResult
+
+class PreviewArea(Static):
+    can_focus = True
+
+    BINDINGS = [
+        ("up", "scroll_up", "Scroll Up"),
+        ("down", "scroll_down", "Scroll Down"),
+        ("pageup", "page_up", "Page Up"),
+        ("pagedown", "page_down", "Page Down"),
+        ("home", "scroll_home", "Home"),
+        ("end", "scroll_end", "End"),
+    ]
 
 class RtxDirectoryTree(DirectoryTree):
     def __init__(self, root: Path, project_path: Path, **kwargs):
@@ -55,6 +68,10 @@ class RtxDirectoryTree(DirectoryTree):
                     
             text = Text(prefix) + text
             
+            # 3. Apply visual highlight (reverse text styling) if selected
+            if path in self.app.selected_paths:
+                text.stylize("bold reverse")
+            
         return text
 
     def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
@@ -71,11 +88,11 @@ class ParsingScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         yield Container(
-            Label("Инициализация парсинга...", id="parsing_title"),
-            Static("Подготовка...", id="parsing_progress"),
+            Label("Initializing parsing...", id="parsing_title"),
+            Static("Preparing...", id="parsing_progress"),
             Static("", id="parsing_log"),
             Static("", id="parsing_summary", classes="hidden"),
-            Button("Закрыть", id="close_btn", variant="primary", classes="hidden"),
+            Button("Close", id="close_btn", variant="primary", classes="hidden"),
             id="parsing_modal_container"
         )
 
@@ -104,35 +121,35 @@ class ParsingScreen(ModalScreen):
         
         progress_widget = self.query_one("#parsing_progress", Static)
         pct = int((current / total) * 100) if total > 0 else 0
-        progress_widget.update(f"Обработано {current} из {total} файлов ({pct}%)")
+        progress_widget.update(f"Processed {current} of {total} files ({pct}%)")
         
         log_widget = self.query_one("#parsing_log", Static)
-        self.log_content.append(f"Парсинг: {rel_path}...")
+        self.log_content.append(f"Parsing: {rel_path}...")
         log_widget.update("\n".join(self.log_content))
         log_widget.scroll_end(animate=False)
 
     def finished_parsing(self, results: List[ParseResult]):
         self.query_one("#parsing_log").add_class("hidden")
         if not self.mirror_mode and not self.output_file:
-            self.query_one("#parsing_progress").update("[bold green]Парсинг завершен! Результаты скопированы в буфер обмена.[/bold green]")
+            self.query_one("#parsing_progress").update("[bold green]Parsing completed! Results copied to clipboard.[/bold green]")
         else:
-            self.query_one("#parsing_progress").update("[bold green]Парсинг завершен![/bold green]")
+            self.query_one("#parsing_progress").update("[bold green]Parsing completed![/bold green]")
         
         summary_panel = self.query_one("#parsing_summary", Static)
         summary_panel.remove_class("hidden")
         
         # Build Table
         table = Table(
-            title="Сводная статистика обработки файлов",
+            title="File Processing Summary Statistics",
             show_header=True,
             header_style="bold magenta",
             expand=True
         )
-        table.add_column("Расширение", style="cyan")
-        table.add_column("Количество файлов", justify="right")
-        table.add_column("Строк извлечено", justify="right")
-        table.add_column("Символов извлечено", justify="right")
-        table.add_column("Статус", justify="center")
+        table.add_column("Extension", style="cyan")
+        table.add_column("File Count", justify="right")
+        table.add_column("Lines Extracted", justify="right")
+        table.add_column("Characters Extracted", justify="right")
+        table.add_column("Status", justify="center")
         
         stats = {}
         for res in results:
@@ -153,11 +170,11 @@ class ParsingScreen(ModalScreen):
             fail = s["failed"]
             
             if fail == 0:
-                status_str = "[green]Успешно[/green]"
+                status_str = "[green]Success[/green]"
             elif succ == 0:
-                status_str = "[red]Ошибка[/red]"
+                status_str = "[red]Error[/red]"
             else:
-                status_str = f"[yellow]Частично ({succ}/{total})[/yellow]"
+                status_str = f"[yellow]Partial ({succ}/{total})[/yellow]"
                 
             table.add_row(
                 ext,
@@ -181,30 +198,65 @@ class ParsingScreen(ModalScreen):
 class RtxApp(App):
     TITLE = "RTX - Universal Workspace Parser"
     BINDINGS = [
-        ("q", "quit", "Выйти"),
-        ("x", "toggle_select", "Выделить (Toggle)"),
-        ("m", "toggle_mode", "Режим (Mirror/Stream)"),
-        ("ctrl+p", "start_parsing", "Парсить выделенные"),
-        ("p", "start_parsing", "Парсить"),
+        ("q", "quit", "Quit"),
+        ("x", "toggle_select", "Select (Toggle)"),
+        ("m", "toggle_mode", "Mode (Mirror/Stream)"),
+        ("ctrl+p", "start_parsing", "Parse Selected"),
+        ("p", "start_parsing", "Parse"),
+        ("o", "open_file", "Open File"),
     ]
     
     CSS = """
     #tree_container {
-        width: 45%;
+        width: 30%;
         border-right: solid $accent;
     }
     #right_panel {
-        width: 55%;
+        width: 70%;
+        layout: horizontal;
+    }
+    #details_container {
+        width: 40%;
+        border-right: solid $accent;
+        padding: 1;
+    }
+    #preview_container {
+        width: 60%;
         padding: 1;
     }
     #details_panel {
         height: 1fr;
-        padding-bottom: 1;
     }
     #input_container {
         height: auto;
         border-top: dashed $accent;
         padding-top: 1;
+    }
+    #preview_header {
+        height: 3;
+        margin-bottom: 1;
+    }
+    #preview_title {
+        text-style: bold;
+        background: $accent;
+        color: $text;
+        padding: 0 2;
+        height: 100%;
+        content-align: left middle;
+        width: 1fr;
+    }
+    #open_file_btn {
+        height: 100%;
+        min-width: 12;
+    }
+    #preview_content {
+        height: 1fr;
+        overflow-y: scroll;
+        border: solid $surface;
+        padding: 1 2;
+    }
+    #preview_content:focus {
+        border: solid $accent;
     }
     
     ParsingScreen {
@@ -252,6 +304,7 @@ class RtxApp(App):
         self.digger = DiggerEngine(self.project_path)
         self.selected_paths: Set[Path] = set()
         self.node_stats: Dict[Path, Tuple[int, int, int, int]] = {}
+        self.current_preview_path: Optional[Path] = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -260,16 +313,28 @@ class RtxApp(App):
                 RtxDirectoryTree(self.project_path, self.project_path, id="dir_tree"),
                 id="tree_container"
             ),
-            Vertical(
-                Static("", id="details_panel"),
+            Horizontal(
                 Vertical(
-                    Label("Выходной файл (Режим A):"),
-                    Input(
-                        value=str(self.output_file) if self.output_file else "",
-                        placeholder="Пусто для копирования в буфер обмена",
-                        id="output_path_input"
+                    Static("", id="details_panel"),
+                    Vertical(
+                        Label("Output File (Mode A):"),
+                        Input(
+                            value=str(self.output_file) if self.output_file else "",
+                            placeholder="Empty to copy to clipboard",
+                            id="output_path_input"
+                        ),
+                        id="input_container"
                     ),
-                    id="input_container"
+                    id="details_container"
+                ),
+                Vertical(
+                    Horizontal(
+                        Label("File Preview: -", id="preview_title"),
+                        Button("Open", id="open_file_btn", variant="default", disabled=True),
+                        id="preview_header"
+                    ),
+                    PreviewArea("(select a file to preview)", id="preview_content"),
+                    id="preview_container"
                 ),
                 id="right_panel"
             )
@@ -282,37 +347,37 @@ class RtxApp(App):
     def update_details(self) -> None:
         details = self.query_one("#details_panel", Static)
         
-        mode_str = "[bold magenta]Режим B: Зеркалирование (.rtx/)[/bold magenta]" if self.mirror_mode else "[bold cyan]Режим A: Единый файл (Stream)[/bold cyan]"
+        mode_str = "[bold magenta]Mode B: Mirroring (.rtx/)[/bold magenta]" if self.mirror_mode else "[bold cyan]Mode A: Single File (Stream)[/bold cyan]"
         if self.mirror_mode:
-            output_str = "[dim]Не применимо (Зеркалирование)[/dim]"
+            output_str = "[dim]Not Applicable (Mirroring)[/dim]"
         else:
-            output_str = f"[green]{self.output_file}[/green]" if self.output_file else "[bold yellow]Буфер обмена (Clipboard)[/bold yellow]"
+            output_str = f"[green]{self.output_file}[/green]" if self.output_file else "[bold yellow]Clipboard[/bold yellow]"
         
         files_count = len([p for p in self.selected_paths if p.is_file()])
         dirs_count = len([p for p in self.selected_paths if p.is_dir()])
         
         lines = [
-            "[bold underline]Настройки RTX[/bold underline]\n",
-            f"Текущий режим: {mode_str}",
-            f"Выходной файл: {output_str}",
-            f"Выбрано файлов: [bold]{files_count}[/bold] (и папок: {dirs_count})\n",
-            "[bold underline]Горячие клавиши[/bold underline]",
-            "  [bold]X[/bold]      - Выделить / Снять выделение",
-            "  [bold]Enter[/bold]  - Раскрыть / Свернуть папку",
-            "  [bold]M[/bold]      - Переключить режим (Mirror / Stream)",
-            "  [bold]Ctrl+P[/bold] - Начать парсинг",
-            "  [bold]Q[/bold]      - Выйти\n",
-            "[bold underline]Выбранные файлы:[/bold underline]"
+            "[bold underline]RTX Settings[/bold underline]\n",
+            f"Current Mode: {mode_str}",
+            f"Output File: {output_str}",
+            f"Selected Files: [bold]{files_count}[/bold] (and folders: {dirs_count})\n",
+            "[bold underline]Keyboard Shortcuts[/bold underline]",
+            "  [bold]X[/bold]      - Select / Deselect",
+            "  [bold]Enter[/bold]  - Expand / Collapse folder",
+            "  [bold]M[/bold]      - Toggle Mode (Mirror / Stream)",
+            "  [bold]Ctrl+P[/bold] - Start Parsing",
+            "  [bold]Q[/bold]      - Quit\n",
+            "[bold underline]Selected Files:[/bold underline]"
         ]
         
         files_only = sorted([p.relative_to(self.project_path) for p in self.selected_paths if p.is_file()])
         if not files_only:
-            lines.append("  [dim](нет выбранных файлов)[/dim]")
+            lines.append("  [dim](no selected files)[/dim]")
         else:
             for p in files_only[:15]:
                 lines.append(f"  • {p}")
             if len(files_only) > 15:
-                lines.append(f"  ... и еще {len(files_only) - 15} файлов.")
+                lines.append(f"  ... and {len(files_only) - 15} more files.")
                 
         details.update("\n".join(lines))
 
@@ -324,7 +389,35 @@ class RtxApp(App):
         else:
             self.output_file = None
         self.update_details()
-        self.notify(f"Выходной файл сохранен: {self.output_file or 'stdout'}")
+        self.notify(f"Output file saved: {self.output_file or 'stdout'}")
+
+    def _get_all_descendants(self, dir_path: Path) -> Tuple[List[Path], List[Path]]:
+        """
+        Recursively get all valid files and directories under dir_path.
+        Returns a tuple of (files, dirs).
+        """
+        import os
+        from rtx.digger import is_excluded_path
+        files = []
+        dirs = []
+        
+        for dirpath, dirnames, filenames in os.walk(dir_path):
+            path_dir = Path(dirpath)
+            
+            # Filter dirnames in-place to prevent entering excluded directories
+            for dirname in list(dirnames):
+                sub_dir = path_dir / dirname
+                if is_excluded_path(sub_dir, self.project_path):
+                    dirnames.remove(dirname)
+                else:
+                    dirs.append(sub_dir.resolve())
+                    
+            for filename in filenames:
+                file_path = path_dir / filename
+                if not is_excluded_path(file_path, self.project_path):
+                    files.append(file_path.resolve())
+                    
+        return files, dirs
 
     def action_toggle_select(self) -> None:
         tree = self.query_one(RtxDirectoryTree)
@@ -340,19 +433,22 @@ class RtxApp(App):
             else:
                 self.selected_paths.add(path)
         elif path.is_dir():
-            # Find all valid descendant files inside the directory
-            files = list(self.digger.scan_valid_files(start_dir=path))
-            # If any of those files are in selected_paths, we toggle all of them off.
-            # Otherwise we select all of them.
-            any_selected = any(f in self.selected_paths for f in files)
+            files, dirs = self._get_all_descendants(path)
+            # Toggle logic: if the directory itself or any of its descendants is currently selected,
+            # we deselect all of them. Otherwise, we select all of them.
+            any_selected = (path in self.selected_paths) or any(f in self.selected_paths for f in files) or any(d in self.selected_paths for d in dirs)
             if any_selected:
+                self.selected_paths.discard(path)
                 for f in files:
                     self.selected_paths.discard(f)
-                self.selected_paths.discard(path)
+                for d in dirs:
+                    self.selected_paths.discard(d)
             else:
+                self.selected_paths.add(path)
                 for f in files:
                     self.selected_paths.add(f)
-                self.selected_paths.add(path)
+                for d in dirs:
+                    self.selected_paths.add(d)
                 
         tree.refresh()
         self.update_details()
@@ -360,12 +456,38 @@ class RtxApp(App):
     def action_toggle_mode(self) -> None:
         self.mirror_mode = not self.mirror_mode
         self.update_details()
-        self.notify(f"Режим изменен: {'Зеркальный' if self.mirror_mode else 'Единый файл'}")
+        self.notify(f"Mode changed: {'Mirroring' if self.mirror_mode else 'Single File (Stream)'}")
+
+    @on(Button.Pressed, "#open_file_btn")
+    def handle_open_file_pressed(self) -> None:
+        self.action_open_file()
+
+    def action_open_file(self) -> None:
+        if self.current_preview_path and self.current_preview_path.is_file():
+            self.open_current_file()
+        else:
+            self.notify("Select a file to open!", severity="warning")
+
+    def open_current_file(self) -> None:
+        if not self.current_preview_path:
+            return
+        import sys
+        import os
+        try:
+            if sys.platform == "darwin":
+                subprocess.run(["open", str(self.current_preview_path)], check=True)
+            elif sys.platform == "win32":
+                os.startfile(self.current_preview_path)
+            else:
+                subprocess.run(["xdg-open", str(self.current_preview_path)], check=True)
+            self.notify(f"File opened in system: {self.current_preview_path.name}")
+        except Exception as e:
+            self.notify(f"Failed to open file: {e}", severity="error")
 
     def action_start_parsing(self) -> None:
         files_only = [p for p in self.selected_paths if p.is_file()]
         if not files_only:
-            self.notify("Выберите файлы для парсинга с помощью клавиши X!", severity="warning")
+            self.notify("Select files to parse using the X key!", severity="warning")
             return
             
         self.push_screen(
@@ -394,6 +516,107 @@ class RtxApp(App):
 
     def _on_metrics_calculated(self) -> None:
         self.query_one(RtxDirectoryTree).refresh()
+
+    @on(DirectoryTree.NodeHighlighted)
+    def handle_node_highlighted(self, event: DirectoryTree.NodeHighlighted[DirEntry]) -> None:
+        node = event.node
+        path = node.data.path if node.data else None
+        if path:
+            self.show_preview(path)
+
+    @work(thread=True, exclusive=True)
+    def show_preview(self, path: Path) -> None:
+        self.current_preview_path = path
+        if path.is_dir():
+            lines = [
+                f"[bold cyan]Folder: {path.name}[/bold cyan]",
+                f"[dim]Path: {path}[/dim]\n"
+            ]
+            if path in self.node_stats:
+                files, lines_cnt, chars, bytes_size = self.node_stats[path]
+                lines.extend([
+                    "[bold]Folder statistics:[/bold]",
+                    f"  Files: {files}",
+                    f"  Lines of code: {lines_cnt}",
+                    f"  Characters: {chars}",
+                    f"  Size: {format_bytes(bytes_size)}"
+                ])
+            else:
+                lines.append("[dim]Statistics not calculated. Expand folder to calculate.[/dim]")
+            
+            self.call_from_thread(self._update_preview_content, Text.from_markup("\n".join(lines)), str(path.name))
+            return
+
+        if path.is_file():
+            self.call_from_thread(self._update_preview_content, Text("Loading preview..."), str(path.name))
+            
+            try:
+                sz = path.stat().st_size
+                if sz > 10 * 1024 * 1024:  # > 10MB
+                    self.call_from_thread(self._update_preview_content, Text("File is too large for preview (>10MB)"), str(path.name))
+                    return
+            except Exception as e:
+                self.call_from_thread(self._update_preview_content, Text(f"Failed to get file info: {e}"), str(path.name))
+                return
+
+            try:
+                res = subprocess.run(
+                    ['bat', '--color=always', '--style=numbers', '--line-range', ':300', str(path)],
+                    capture_output=True,
+                    text=True,
+                    timeout=2.0
+                )
+                if res.returncode == 0:
+                    preview_text = Text.from_ansi(res.stdout)
+                    self.call_from_thread(self._update_preview_content, preview_text, str(path.name))
+                    return
+            except Exception:
+                pass
+
+            # Fallback to reading file and highlighting using plain text
+            try:
+                lines = []
+                with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                    for _ in range(300):
+                        line = f.readline()
+                        if not line:
+                            break
+                        lines.append(line)
+                
+                content = "".join(lines)
+                if '\x00' in content:
+                    msg = (
+                        "This file is binary or has a format (e.g. PDF, DOCX, image)\n"
+                        "that cannot be displayed as plain text.\n\n"
+                        "You can open it in the associated system application\n"
+                        "by clicking the 'Open' button in the top-right corner or pressing 'O'."
+                    )
+                    self.call_from_thread(self._update_preview_content, Text(msg), str(path.name))
+                    return
+
+                numbered_lines = []
+                for i, line in enumerate(lines, 1):
+                    numbered_lines.append(f"{i:4d} │ {line.rstrip()}")
+                fallback_text = Text("\n".join(numbered_lines))
+                self.call_from_thread(self._update_preview_content, fallback_text, str(path.name))
+            except Exception as e:
+                self.call_from_thread(self._update_preview_content, Text(f"Failed to read file: {e}"), str(path.name))
+
+    def _update_preview_content(self, text: Text, title: str) -> None:
+        try:
+            self.query_one("#preview_title", Label).update(f"Preview: {title}")
+            content_widget = self.query_one("#preview_content", PreviewArea)
+            content_widget.update(text)
+            content_widget.scroll_home(animate=False)
+            
+            # Update "Open" button disabled state
+            btn = self.query_one("#open_file_btn", Button)
+            if self.current_preview_path and self.current_preview_path.is_file():
+                btn.disabled = False
+            else:
+                btn.disabled = True
+        except Exception:
+            pass
 
 def run_tui(project_path: Path, mirror_mode: bool = False, output_file: Optional[Path] = None):
     app = RtxApp(project_path, mirror_mode=mirror_mode, output_file=output_file)

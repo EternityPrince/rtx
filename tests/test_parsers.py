@@ -60,3 +60,46 @@ def test_epub_parser(sandbox_dir):
     out = parser.parse(sandbox_dir / "sample.epub")
     assert "Introduction to RTX" in out
     assert "Epub is a great digital book format" in out
+
+def test_get_safe_markdown_fence():
+    from rtx.parsers.pdf import get_safe_markdown_fence
+    assert get_safe_markdown_fence("hello") == "```"
+    assert get_safe_markdown_fence("```python\nprint(1)\n```") == "````"
+    assert get_safe_markdown_fence("````markdown\n```\n````") == "`````"
+
+def test_code_parser_dynamic_fence(sandbox_dir):
+    parser = CodeParser()
+    temp_md = sandbox_dir / "nested.md"
+    temp_md.write_text("```python\nprint(1)\n```", encoding="utf-8")
+    try:
+        out = parser.parse(temp_md)
+        assert out.startswith("````markdown")
+        assert out.endswith("````")
+    finally:
+        temp_md.unlink()
+
+def test_pdf_parser_fallbacks(sandbox_dir, monkeypatch):
+    import sys
+    from rtx.parsers.pdf import PdfParser
+    import rtx.parsers.pdf
+    
+    # Force marker to be treated as missing/import failure
+    monkeypatch.setitem(sys.modules, "marker", None)
+    monkeypatch.setitem(sys.modules, "marker.convert", None)
+    
+    # Capture calls to logger.debug
+    debug_calls = []
+    def mock_debug(msg, *args, **kwargs):
+        debug_calls.append(msg)
+    monkeypatch.setattr(rtx.parsers.pdf.logger, "debug", mock_debug)
+    
+    parser = PdfParser()
+    out = parser.parse(sandbox_dir / "sample.pdf")
+    assert "Hello PDF World" in out
+    
+    # Verify that the debug log was called because of marker failure
+    assert len(debug_calls) >= 1
+    assert any("marker-pdf failed" in str(msg) for msg in debug_calls)
+
+
+

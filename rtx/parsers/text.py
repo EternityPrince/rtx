@@ -6,8 +6,7 @@ class TextParser(BaseParser):
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
             
-        fence = "```"
-        if "```" in content:
-            fence = "````"
+        from rtx.parsers.pdf import get_safe_markdown_fence
+        fence = get_safe_markdown_fence(content)
             
         return f"{fence}text\n{content}\n{fence}"

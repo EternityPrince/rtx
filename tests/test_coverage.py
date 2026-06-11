@@ -42,7 +42,7 @@ def test_summary_table_edge_cases():
     # Empty results
     print_summary_table([], console)
     out_empty = console.export_text()
-    assert "Нет файлов для обработки" in out_empty
+    assert "No files to process" in out_empty
     
     # Mixed and failing results
     results = [
@@ -54,8 +54,8 @@ def test_summary_table_edge_cases():
     print_summary_table(results, console)
     out_mixed = console.export_text()
     assert "no_ext" in out_mixed
-    assert "Частично" in out_mixed
-    assert "Ошибка" in out_mixed
+    assert "Partial" in out_mixed
+    assert "Error" in out_mixed
 
 def test_cli_tui_and_empty_directory_calls(sandbox_dir):
     from typer.testing import CliRunner
@@ -74,7 +74,7 @@ def test_cli_tui_and_empty_directory_calls(sandbox_dir):
     
     result2 = runner.invoke(app, [str(empty_scan_dir)])
     assert result2.exit_code == 0
-    assert "Нет валидных файлов для обработки" in result2.output
+    assert "No valid files to process" in result2.output
 
 def test_cli_runpy_main():
     with patch.object(sys, "argv", ["rtx", "--help"]):

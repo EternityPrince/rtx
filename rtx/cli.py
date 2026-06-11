@@ -14,20 +14,20 @@ app = typer.Typer(add_completion=False, help="RTX - Universal Workspace Parser &
 def print_summary_table(results: List[ParseResult], console: Console):
     """Prints a beautiful Rich table summarizing the parsing statistics."""
     if not results:
-        console.print("[yellow]Нет файлов для обработки.[/yellow]")
+        console.print("[yellow]No files to process.[/yellow]")
         return
         
     table = Table(
-        title="Сводная статистика обработки файлов",
+        title="File Processing Summary Statistics",
         show_header=True,
         header_style="bold magenta",
         expand=True
     )
-    table.add_column("Расширение", style="cyan")
-    table.add_column("Количество файлов", justify="right")
-    table.add_column("Строк извлечено", justify="right")
-    table.add_column("Символов извлечено", justify="right")
-    table.add_column("Статус", justify="center")
+    table.add_column("Extension", style="cyan")
+    table.add_column("File Count", justify="right")
+    table.add_column("Lines Extracted", justify="right")
+    table.add_column("Characters Extracted", justify="right")
+    table.add_column("Status", justify="center")
     
     # Group results by extension
     stats = {}
@@ -51,11 +51,11 @@ def print_summary_table(results: List[ParseResult], console: Console):
         fail = s["failed"]
         
         if fail == 0:
-            status_str = "[green]Успешно[/green]"
+            status_str = "[green]Success[/green]"
         elif succ == 0:
-            status_str = "[red]Ошибка[/red]"
+            status_str = "[red]Error[/red]"
         else:
-            status_str = f"[yellow]Частично ({succ}/{total})[/yellow]"
+            status_str = f"[yellow]Partial ({succ}/{total})[/yellow]"
             
         table.add_row(
             ext,
@@ -71,7 +71,7 @@ def print_summary_table(results: List[ParseResult], console: Console):
 def main(
     path: Path = typer.Argument(
         default=Path("."),
-        help="Путь к директории проекта для сканирования",
+        help="Path to the project directory to scan",
         exists=True,
         file_okay=False,
         dir_okay=True,
@@ -80,17 +80,17 @@ def main(
     tui: bool = typer.Option(
         False,
         "--tui",
-        help="Запустить интерактивный TUI режим",
+        help="Run in interactive TUI mode",
     ),
     mirror: bool = typer.Option(
         False,
         "--mirror", "-m",
-        help="Режим B: Зеркалирование структуры в скрытую папку .rtx/",
+        help="Mode B: Mirror directory structure into the hidden folder .rtx/",
     ),
     output: Optional[Path] = typer.Option(
         None,
         "--output", "-o",
-        help="Режим A: Путь к выходному файлу (если не указан и mirror=False, выводит в stdout)",
+        help="Mode A: Path to the output file (if not specified and mirror=False, prints to stdout and clipboard)",
         dir_okay=False,
     ),
 ):
@@ -105,35 +105,35 @@ def main(
         use_stderr = (not mirror and output is None)
         log_console = Console(stderr=use_stderr)
         
-        log_console.print(f"[bold green]RTX:[/bold green] Сканирование директории: [cyan]{path}[/cyan]")
+        log_console.print(f"[bold green]RTX:[/bold green] Scanning directory: [cyan]{path}[/cyan]")
         digger = DiggerEngine(path)
         
-        log_console.print("[yellow]Сбор списка файлов...[/yellow]")
+        log_console.print("[yellow]Collecting file list...[/yellow]")
         files = list(digger.scan_valid_files())
         
         if not files:
-            log_console.print("[bold red]Нет валидных файлов для обработки в директории.[/bold red]")
+            log_console.print("[bold red]No valid files to process in the directory.[/bold red]")
             raise typer.Exit()
             
-        log_console.print(f"Найдено файлов для парсинга: [bold]{len(files)}[/bold].")
+        log_console.print(f"Files found for parsing: [bold]{len(files)}[/bold].")
         
         # Run parsing pipeline
-        with log_console.status("[bold blue]Обработка файлов батчами...[/bold blue]") as status:
+        with log_console.status("[bold blue]Processing files in batches...[/bold blue]") as status:
             def progress(p: Path, idx: int, total: int):
-                status.update(f"[bold blue]Обработка [{idx+1}/{total}]:[/bold blue] {p.name}")
+                status.update(f"[bold blue]Processing [{idx+1}/{total}]:[/bold blue] {p.name}")
             results = run_parser_pipeline(files, progress_callback=progress)
             
         # Write output
         if mirror:
-            log_console.print("[yellow]Запись результатов в режиме зеркалирования (.rtx/)...[/yellow]")
+            log_console.print("[yellow]Writing results in mirror mode (.rtx/)...[/yellow]")
             write_mirror(results, path)
         else:
             if output:
-                log_console.print(f"[yellow]Запись результатов в файл {output}...[/yellow]")
+                log_console.print(f"[yellow]Writing results to file {output}...[/yellow]")
                 write_stream(results, path, output_file=output)
             else:
                 write_stream(results, path, output_file=None)
-                log_console.print("[bold green]Результаты скопированы в буфер обмена![/bold green]")
+                log_console.print("[bold green]Results copied to clipboard![/bold green]")
                 
         # Print stats summary
         print_summary_table(results, log_console)

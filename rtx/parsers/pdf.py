@@ -1,6 +1,9 @@
 import gc
+import logging
 from pathlib import Path
 from rtx.parsers.base import BaseParser
+
+logger = logging.getLogger(__name__)
 
 # Module-level variable to cache marker models
 _marker_models = None
@@ -33,8 +36,20 @@ def clear_marker_models():
                 torch.cuda.empty_cache()
             if hasattr(torch, "mps") and torch.mps.is_available():
                 torch.mps.empty_cache()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to clear PyTorch cache: {e}")
+
+def get_safe_markdown_fence(content: str) -> str:
+    """
+    Finds the maximum sequence of backticks in the content
+    and returns a fence string that is at least 3 backticks long,
+    and at least one backtick longer than any backtick sequence in the content.
+    """
+    import re
+    backticks = re.findall(r'`+', content)
+    max_backticks = max(len(b) for b in backticks) if backticks else 0
+    fence_length = max(3, max_backticks + 1)
+    return "`" * fence_length
 
 class PdfParser(BaseParser):
     def parse(self, path: Path) -> str:
@@ -46,8 +61,9 @@ class PdfParser(BaseParser):
             if full_text and full_text.strip():
                 return full_text.strip()
         except Exception as e:
-            # Fallback to PyMuPDF or PyPDF if marker fails or is not available
-            pass
+            logger.debug(
+                f"marker-pdf failed for {path.name}, falling back to PyMuPDF. Error: {e}"
+            )
             
         # 2. Fallback to PyMuPDF (extremely fast, good layout)
         try:
@@ -60,8 +76,10 @@ class PdfParser(BaseParser):
                     pages.append(t)
             if pages:
                 return "\n".join(pages).strip()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(
+                f"PyMuPDF failed for {path.name}, falling back to pypdf. Error: {e}"
+            )
 
         # 3. Fallback to PyPDF
         try:
@@ -75,6 +93,8 @@ class PdfParser(BaseParser):
             if pages:
                 return "\n".join(pages).strip()
         except Exception as e:
+            logger.debug(f"pypdf failed for {path.name}: {e}")
             raise RuntimeError(f"PDF parsing failed for {path.name}: {str(e)}")
         
         return ""
+
