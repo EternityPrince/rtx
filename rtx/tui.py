@@ -92,6 +92,34 @@ class RtxDirectoryTree(DirectoryTree):
                     filtered.append(p)
         return filtered
 
+class ConfirmPdfScreen(ModalScreen[bool]):
+    def __init__(self, already_indexed_pdfs: List[Path], project_path: Path):
+        self.already_indexed_pdfs = already_indexed_pdfs
+        self.project_path = project_path
+        super().__init__()
+
+    def compose(self) -> ComposeResult:
+        pdf_list = "\n".join(
+            f"- {p.relative_to(self.project_path) if p.is_relative_to(self.project_path) else p}"
+            for p in self.already_indexed_pdfs
+        )
+        yield Container(
+            Label("Confirm Re-scanning Indexed PDFs", id="confirm_title"),
+            Static(f"The following PDF files are already indexed in .rtx/:\n\n{pdf_list}\n\nDo you want to re-scan them?", id="confirm_message"),
+            Horizontal(
+                Button("Yes, Re-scan", id="yes_btn", variant="primary"),
+                Button("No, Skip", id="no_btn", variant="default"),
+                id="confirm_buttons"
+            ),
+            id="confirm_modal_container"
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "yes_btn":
+            self.dismiss(True)
+        elif event.button.id == "no_btn":
+            self.dismiss(False)
+
 class ParsingScreen(ModalScreen):
     def __init__(self, selected_files: List[Path], mirror_mode: bool, output_file: Optional[Path], project_path: Path):
         self.selected_files = selected_files
@@ -324,6 +352,32 @@ class RtxApp(App):
     }
     .hidden {
         display: none;
+    }
+    ConfirmPdfScreen {
+        align: center middle;
+    }
+    #confirm_modal_container {
+        width: 60%;
+        height: auto;
+        border: thick $accent;
+        background: $panel;
+        padding: 1 2;
+    }
+    #confirm_title {
+        text-style: bold;
+        text-align: center;
+        margin-bottom: 1;
+        color: $accent;
+    }
+    #confirm_message {
+        margin-bottom: 1;
+    }
+    #confirm_buttons {
+        align: center middle;
+        height: auto;
+    }
+    #confirm_buttons Button {
+        margin: 0 1;
     }
     """
 
@@ -569,14 +623,48 @@ class RtxApp(App):
             self.notify("Select files to parse using the X key!", severity="warning")
             return
             
-        self.push_screen(
-            ParsingScreen(
-                selected_files=files_only,
-                mirror_mode=self.mirror_mode,
-                output_file=self.output_file,
-                project_path=self.project_path
+        # Check for already indexed PDFs
+        already_indexed = []
+        for f in files_only:
+            if f.suffix.lower() == ".pdf":
+                try:
+                    rel_path = f.relative_to(self.project_path)
+                except ValueError:
+                    rel_path = Path(f.name)
+                mirror_path = self.project_path / ".rtx" / rel_path.with_name(rel_path.name + ".md")
+                if mirror_path.exists():
+                    already_indexed.append(f)
+
+        if already_indexed:
+            def handle_confirm(re_scan: Optional[bool]) -> None:
+                if re_scan is None:
+                    return
+                final_files = files_only
+                if not re_scan:
+                    final_files = [f for f in files_only if f not in already_indexed]
+                    if not final_files:
+                        self.notify("No files left to parse.", severity="warning")
+                        return
+                
+                self.push_screen(
+                    ParsingScreen(
+                        selected_files=final_files,
+                        mirror_mode=self.mirror_mode,
+                        output_file=self.output_file,
+                        project_path=self.project_path
+                    )
+                )
+            
+            self.push_screen(ConfirmPdfScreen(already_indexed, self.project_path), handle_confirm)
+        else:
+            self.push_screen(
+                ParsingScreen(
+                    selected_files=files_only,
+                    mirror_mode=self.mirror_mode,
+                    output_file=self.output_file,
+                    project_path=self.project_path
+                )
             )
-        )
 
     @on(DirectoryTree.NodeExpanded)
     def handle_node_expanded(self, event: DirectoryTree.NodeExpanded[DirEntry]) -> None:

@@ -267,6 +267,36 @@ def scan(
         log_console.print("[bold red]No valid files to process.[/bold red]")
         raise typer.Exit()
         
+    # Check for already indexed PDFs in .rtx/
+    pdf_already_indexed = []
+    for f in files:
+        if f.suffix.lower() == ".pdf":
+            try:
+                rel_path = f.relative_to(project_path)
+            except ValueError:
+                rel_path = Path(f.name)
+            mirror_path = project_path / ".rtx" / rel_path.with_name(rel_path.name + ".md")
+            if mirror_path.exists():
+                pdf_already_indexed.append((f, rel_path))
+                
+    if pdf_already_indexed:
+        files_to_keep = []
+        skipped_any = False
+        for f, rel_path in pdf_already_indexed:
+            log_console.print(f"[bold yellow]Warning:[/bold yellow] PDF file '{rel_path}' is already indexed in .rtx/.")
+            if typer.confirm("Do you want to re-scan it?", default=False):
+                files_to_keep.append(f)
+            else:
+                log_console.print(f"[yellow]Skipping already indexed PDF:[/yellow] {rel_path}")
+                skipped_any = True
+                
+        if skipped_any:
+            skipped_set = {f for f, _ in pdf_already_indexed if f not in files_to_keep}
+            files = [f for f in files if f not in skipped_set]
+            if not files:
+                log_console.print("[yellow]No files left to process.[/yellow]")
+                raise typer.Exit()
+        
     log_console.print(f"Files found for parsing: [bold]{len(files)}[/bold].")
     
     with log_console.status("[bold blue]Processing files in batches...[/bold blue]") as status:

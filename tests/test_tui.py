@@ -94,3 +94,48 @@ async def test_tui_recursive_selection(sandbox_dir):
         await pilot.pause()
         assert len(app.selected_paths) == 0
 
+@pytest.mark.asyncio
+async def test_tui_already_indexed_pdf(sandbox_dir):
+    # 1. Create a PDF file in sandbox_dir
+    pdf_path = (sandbox_dir / "tui_test_doc.pdf").resolve()
+    import fitz
+    doc_pdf = fitz.open()
+    page = doc_pdf.new_page()
+    page.insert_text((50, 50), "PDF content", fontsize=12)
+    doc_pdf.save(pdf_path)
+    
+    # 2. Simulate mirror index of it in .rtx/
+    rtx_dir = sandbox_dir / ".rtx"
+    rtx_dir.mkdir(exist_ok=True)
+    mirror_pdf = rtx_dir / "tui_test_doc.pdf.md"
+    mirror_pdf.write_text("Parsed PDF content", encoding="utf-8")
+    
+    app = RtxApp(sandbox_dir)
+    try:
+        async with app.run_test() as pilot:
+            # Directly add to selected paths to avoid navigating the directory tree
+            app.selected_paths.add(pdf_path)
+            
+            # Start parsing - this should trigger the ConfirmPdfScreen
+            app.action_start_parsing()
+            await pilot.pause()
+            
+            # Verify that the ConfirmPdfScreen is the current screen
+            from rtx.tui import ConfirmPdfScreen
+            assert isinstance(app.screen, ConfirmPdfScreen)
+            
+            # Dismiss the confirmation screen with False (skip re-scan)
+            app.screen.dismiss(False)
+            await pilot.pause()
+            
+            # Since we skipped the only selected file, it should notify that no files are left
+            # Verify it dismissed and we are back on the main screen
+            assert not isinstance(app.screen, ConfirmPdfScreen)
+    finally:
+        if pdf_path.exists():
+            pdf_path.unlink()
+        import shutil
+        if rtx_dir.exists():
+            shutil.rmtree(rtx_dir)
+
+
