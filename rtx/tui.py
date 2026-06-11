@@ -1,21 +1,22 @@
 import asyncio
 import subprocess
 from pathlib import Path
-from typing import List, Dict, Tuple, Set, Optional, Iterable
+from typing import List, Dict, Tuple, Set, Optional, Iterable, Union
 from rich.text import Text
 from rich.table import Table
 
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
-from textual.widgets import Header, Footer, Static, Input, Label, DirectoryTree, Button
+from textual.widgets import Header, Footer, Static, Input, Label, DirectoryTree, Button, Markdown
 from textual.widgets.tree import TreeNode
 from textual.widgets._directory_tree import DirEntry
 from textual.screen import ModalScreen
 from textual.worker import get_current_worker
 
-from rtx.digger import DiggerEngine, format_bytes
+from rtx.digger import DiggerEngine, format_bytes, get_file_metrics
 from rtx.pipeline import run_parser_pipeline, ParseResult
+from rtx.parsers import get_parser_for_path
 
 class PreviewArea(Static):
     can_focus = True
@@ -75,7 +76,21 @@ class RtxDirectoryTree(DirectoryTree):
         return text
 
     def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
-        return paths
+        query = getattr(self.app, "search_query", "").strip()
+        if not query:
+            return paths
+            
+        import fnmatch
+        filtered = []
+        query_lower = query.lower()
+        for p in paths:
+            if p.is_dir():
+                filtered.append(p)
+            else:
+                name_lower = p.name.lower()
+                if query_lower in name_lower or fnmatch.fnmatch(name_lower, query_lower):
+                    filtered.append(p)
+        return filtered
 
 class ParsingScreen(ModalScreen):
     def __init__(self, selected_files: List[Path], mirror_mode: bool, output_file: Optional[Path], project_path: Path):
@@ -262,6 +277,19 @@ class RtxApp(App):
     #preview_content:focus {
         border: solid $accent;
     }
+    #preview_markdown {
+        height: 1fr;
+        overflow-y: scroll;
+        border: solid $surface;
+        padding: 1 2;
+    }
+    #preview_markdown:focus {
+        border: solid $accent;
+    }
+    #search_input {
+        margin-bottom: 1;
+        border: solid $accent;
+    }
     
     ParsingScreen {
         align: center middle;
@@ -309,11 +337,13 @@ class RtxApp(App):
         self.selected_paths: Set[Path] = set()
         self.node_stats: Dict[Path, Tuple[int, int, int, int]] = {}
         self.current_preview_path: Optional[Path] = None
+        self.search_query: str = ""
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield Horizontal(
             Vertical(
+                Input(placeholder="Filter files (e.g. *.py)...", id="search_input"),
                 RtxDirectoryTree(self.project_path, self.project_path, id="dir_tree"),
                 id="tree_container"
             ),
@@ -338,6 +368,7 @@ class RtxApp(App):
                         id="preview_header"
                     ),
                     PreviewArea("(select a file to preview)", id="preview_content"),
+                    Markdown(id="preview_markdown", classes="hidden"),
                     id="preview_container"
                 ),
                 id="right_panel"
@@ -347,24 +378,55 @@ class RtxApp(App):
 
     def on_mount(self) -> None:
         self.update_details()
+        self.query_one("#dir_tree").focus()
+
+    def get_selected_metrics(self) -> Tuple[int, int, int, int, int]:
+        """
+        Calculate metrics for all selected files: (Files, Lines, Chars, Bytes, EstTokens).
+        """
+        total_files = 0
+        total_lines = 0
+        total_chars = 0
+        total_bytes = 0
+        total_tokens = 0
+        
+        for path in list(self.selected_paths):
+            if path.is_file():
+                if path in self.digger.metrics_cache:
+                    _, lines, chars, bytes_sz = self.digger.metrics_cache[path]
+                else:
+                    lines, chars, bytes_sz = get_file_metrics(path)
+                    self.digger.metrics_cache[path] = (1, lines, chars, bytes_sz)
+                
+                total_files += 1
+                total_lines += lines
+                total_chars += chars
+                total_bytes += bytes_sz
+                total_tokens += chars // 4
+                
+        return total_files, total_lines, total_chars, total_bytes, total_tokens
 
     def update_details(self) -> None:
         details = self.query_one("#details_panel", Static)
         
-        mode_str = "[bold magenta]Mode B: Mirroring (.rtx/)[/bold magenta]" if self.mirror_mode else "[bold cyan]Mode A: Single File (Stream)[/bold cyan]"
+        mode_str = "[bold underline magenta]Mode B: Mirroring (.rtx/)[/bold underline magenta]" if self.mirror_mode else "[bold underline cyan]Mode A: Single File (Stream)[/bold underline cyan]"
         if self.mirror_mode:
             output_str = "[dim]Not Applicable (Mirroring)[/dim]"
         else:
             output_str = f"[green]{self.output_file}[/green]" if self.output_file else "[bold yellow]Clipboard[/bold yellow]"
         
-        files_count = len([p for p in self.selected_paths if p.is_file()])
+        files_count, total_lines, total_chars, total_bytes, total_tokens = self.get_selected_metrics()
         dirs_count = len([p for p in self.selected_paths if p.is_dir()])
         
         lines = [
             "[bold underline]RTX Settings[/bold underline]\n",
             f"Current Mode: {mode_str}",
             f"Output File: {output_str}",
-            f"Selected Files: [bold]{files_count}[/bold] (and folders: {dirs_count})\n",
+            f"Selected Files: [bold]{files_count}[/bold] (and folders: {dirs_count})",
+            f"Total Size: [bold]{format_bytes(total_bytes)}[/bold]",
+            f"Lines of Code: [bold]{total_lines:,}[/bold]",
+            f"Characters: [bold]{total_chars:,}[/bold]",
+            f"Est. Tokens: [bold]{total_tokens:,}[/bold]\n",
             "[bold underline]Keyboard Shortcuts[/bold underline]",
             "  [bold]X[/bold]      - Select / Deselect",
             "  [bold]Enter[/bold]  - Expand / Collapse folder",
@@ -384,6 +446,12 @@ class RtxApp(App):
                 lines.append(f"  ... and {len(files_only) - 15} more files.")
                 
         details.update("\n".join(lines))
+
+    @on(Input.Changed, "#search_input")
+    def handle_search_changed(self, event: Input.Changed) -> None:
+        self.search_query = event.value
+        tree = self.query_one(RtxDirectoryTree)
+        tree.reload()
 
     @on(Input.Submitted, "#output_path_input")
     def handle_output_path_submit(self, event: Input.Submitted) -> None:
@@ -411,14 +479,14 @@ class RtxApp(App):
             # Filter dirnames in-place to prevent entering excluded directories
             for dirname in list(dirnames):
                 sub_dir = path_dir / dirname
-                if is_excluded_path(sub_dir, self.project_path):
+                if is_excluded_path(sub_dir, self.project_path, self.digger.ignore_patterns):
                     dirnames.remove(dirname)
                 else:
                     dirs.append(sub_dir.resolve())
                     
             for filename in filenames:
                 file_path = path_dir / filename
-                if not is_excluded_path(file_path, self.project_path):
+                if not is_excluded_path(file_path, self.project_path, self.digger.ignore_patterns):
                     files.append(file_path.resolve())
                     
         return files, dirs
@@ -543,8 +611,8 @@ class RtxApp(App):
                 f"[bold cyan]Folder: {path.name}[/bold cyan]",
                 f"[dim]Path: {path}[/dim]\n"
             ]
-            if path in self.node_stats:
-                files, lines_cnt, chars, bytes_size = self.node_stats[path]
+            if path in self.app.node_stats:
+                files, lines_cnt, chars, bytes_size = self.app.node_stats[path]
                 lines.extend([
                     "[bold]Folder statistics:[/bold]",
                     f"  Files: {files}",
@@ -555,21 +623,48 @@ class RtxApp(App):
             else:
                 lines.append("[dim]Statistics not calculated. Expand folder to calculate.[/dim]")
             
-            self.call_from_thread(self._update_preview_content, Text.from_markup("\n".join(lines)), str(path.name))
+            self.call_from_thread(self._update_preview_content, Text.from_markup("\n".join(lines)), str(path.name), is_markdown=False)
             return
 
         if path.is_file():
-            self.call_from_thread(self._update_preview_content, Text("Loading preview..."), str(path.name))
+            self.call_from_thread(self._update_preview_content, Text("Loading preview..."), str(path.name), is_markdown=False)
             
             try:
                 sz = path.stat().st_size
                 if sz > 10 * 1024 * 1024:  # > 10MB
-                    self.call_from_thread(self._update_preview_content, Text("File is too large for preview (>10MB)"), str(path.name))
+                    self.call_from_thread(self._update_preview_content, Text("File is too large for preview (>10MB)"), str(path.name), is_markdown=False)
                     return
             except Exception as e:
-                self.call_from_thread(self._update_preview_content, Text(f"Failed to get file info: {e}"), str(path.name))
+                self.call_from_thread(self._update_preview_content, Text(f"Failed to get file info: {e}"), str(path.name), is_markdown=False)
                 return
 
+            suffix = path.suffix.lower()
+            
+            # Markdown preview
+            if suffix == ".md":
+                try:
+                    content = path.read_text(encoding="utf-8", errors="ignore")
+                    self.call_from_thread(self._update_preview_content, content, str(path.name), is_markdown=True)
+                    return
+                except Exception as e:
+                    self.call_from_thread(self._update_preview_content, Text(f"Failed to read markdown file: {e}"), str(path.name), is_markdown=False)
+                    return
+            
+            # Formatted documents preview (docx, xlsx, csv, pptx, epub, fb2)
+            if suffix in (".docx", ".xlsx", ".csv", ".pptx", ".epub", ".fb2"):
+                try:
+                    self.call_from_thread(self._update_preview_content, "Generating document preview...", str(path.name), is_markdown=False)
+                    parser = get_parser_for_path(path)
+                    markdown_text = parser.parse(path)
+                    if len(markdown_text) > 5000:
+                        markdown_text = markdown_text[:5000] + "\n\n...(preview truncated)..."
+                    self.call_from_thread(self._update_preview_content, markdown_text, str(path.name), is_markdown=True)
+                    return
+                except Exception as e:
+                    self.call_from_thread(self._update_preview_content, Text(f"Failed to parse document: {e}"), str(path.name), is_markdown=False)
+                    return
+
+            # Default text/code preview
             try:
                 res = subprocess.run(
                     ['bat', '--color=always', '--style=numbers', '--line-range', ':300', str(path)],
@@ -579,7 +674,7 @@ class RtxApp(App):
                 )
                 if res.returncode == 0:
                     preview_text = Text.from_ansi(res.stdout)
-                    self.call_from_thread(self._update_preview_content, preview_text, str(path.name))
+                    self.call_from_thread(self._update_preview_content, preview_text, str(path.name), is_markdown=False)
                     return
             except Exception:
                 pass
@@ -597,28 +692,37 @@ class RtxApp(App):
                 content = "".join(lines)
                 if '\x00' in content:
                     msg = (
-                        "This file is binary or has a format (e.g. PDF, DOCX, image)\n"
+                        "This file is binary or has a format (e.g. PDF, image)\n"
                         "that cannot be displayed as plain text.\n\n"
                         "You can open it in the associated system application\n"
                         "by clicking the 'Open' button in the top-right corner or pressing 'O'."
                     )
-                    self.call_from_thread(self._update_preview_content, Text(msg), str(path.name))
+                    self.call_from_thread(self._update_preview_content, Text(msg), str(path.name), is_markdown=False)
                     return
 
                 numbered_lines = []
                 for i, line in enumerate(lines, 1):
                     numbered_lines.append(f"{i:4d} │ {line.rstrip()}")
                 fallback_text = Text("\n".join(numbered_lines))
-                self.call_from_thread(self._update_preview_content, fallback_text, str(path.name))
+                self.call_from_thread(self._update_preview_content, fallback_text, str(path.name), is_markdown=False)
             except Exception as e:
-                self.call_from_thread(self._update_preview_content, Text(f"Failed to read file: {e}"), str(path.name))
+                self.call_from_thread(self._update_preview_content, Text(f"Failed to read file: {e}"), str(path.name), is_markdown=False)
 
-    def _update_preview_content(self, text: Text, title: str) -> None:
+    def _update_preview_content(self, text: Union[Text, str], title: str, is_markdown: bool = False) -> None:
         try:
             self.query_one("#preview_title", Label).update(f"Preview: {title}")
             content_widget = self.query_one("#preview_content", PreviewArea)
-            content_widget.update(text)
-            content_widget.scroll_home(animate=False)
+            markdown_widget = self.query_one("#preview_markdown", Markdown)
+            
+            if is_markdown:
+                content_widget.add_class("hidden")
+                markdown_widget.remove_class("hidden")
+                markdown_widget.update(str(text))
+            else:
+                markdown_widget.add_class("hidden")
+                content_widget.remove_class("hidden")
+                content_widget.update(text)
+                content_widget.scroll_home(animate=False)
             
             # Update "Open" button disabled state
             btn = self.query_one("#open_file_btn", Button)

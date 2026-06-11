@@ -20,10 +20,17 @@ async def test_tui_startup_and_bindings(sandbox_dir):
         assert app.query_one("#output_path_input") is not None
         assert app.query_one("#preview_title") is not None
         assert app.query_one("#preview_content") is not None
+        assert app.query_one("#preview_markdown") is not None
+        assert app.query_one("#search_input") is not None
         assert app.query_one("#open_file_btn") is not None
         
         # Verify preview area is focusable
         assert app.query_one("#preview_content").can_focus is True
+        
+        # Test search input updates app search query
+        app.query_one("#search_input").value = "*.py"
+        await pilot.pause()
+        assert app.search_query == "*.py"
         
         # Verify preview updates for a directory
         app.show_preview(sandbox_dir)

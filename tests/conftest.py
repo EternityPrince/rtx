@@ -59,7 +59,26 @@ def sandbox_dir(tmp_path):
     book.add_item(epub.EpubNav())
     epub.write_epub(tmp_path / "sample.epub", book)
 
-    # 7. Excluded folders
+    # 7. Create a CSV file
+    csv_path = tmp_path / "sample.csv"
+    with open(csv_path, "w", encoding="utf-8", newline="") as f:
+        import csv
+        writer = csv.writer(f)
+        writer.writerow(["Header1", "Header2"])
+        writer.writerow(["Row1Col1", "Row1Col2"])
+        writer.writerow(["Row2Col1", "Row2Col2"])
+
+    # 8. Create an XLSX file using openpyxl
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "TestSheet"
+    ws.append(["ColA", "ColB"])
+    ws.append(["ValA1", "ValB1"])
+    ws.append(["ValA2", "ValB2"])
+    wb.save(tmp_path / "sample.xlsx")
+
+    # 9. Excluded folders
     excluded_dir = tmp_path / "node_modules"
     excluded_dir.mkdir(exist_ok=True)
     with open(excluded_dir / "index.js", "w") as f:

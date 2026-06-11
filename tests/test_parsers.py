@@ -4,6 +4,8 @@ from rtx.parsers import (
     CodeParser,
     TextParser,
     DocxParser,
+    XlsxParser,
+    CsvParser,
     PptxParser,
     EbookParser,
     PdfParser,
@@ -14,6 +16,8 @@ def test_parser_factory():
     assert isinstance(get_parser_for_path(Path("file.md")), CodeParser)
     assert isinstance(get_parser_for_path(Path("file.txt")), TextParser)
     assert isinstance(get_parser_for_path(Path("file.docx")), DocxParser)
+    assert isinstance(get_parser_for_path(Path("file.xlsx")), XlsxParser)
+    assert isinstance(get_parser_for_path(Path("file.csv")), CsvParser)
     assert isinstance(get_parser_for_path(Path("file.pptx")), PptxParser)
     assert isinstance(get_parser_for_path(Path("file.epub")), EbookParser)
     assert isinstance(get_parser_for_path(Path("file.fb2")), EbookParser)
@@ -101,6 +105,19 @@ def test_pdf_parser_fallbacks(sandbox_dir, monkeypatch):
     # Verify that the debug log was called because of marker failure
     assert len(debug_calls) >= 1
     assert any("marker-pdf failed" in str(msg) for msg in debug_calls)
+
+def test_xlsx_parser(sandbox_dir):
+    parser = XlsxParser()
+    out = parser.parse(sandbox_dir / "sample.xlsx")
+    assert "Sheet: TestSheet" in out
+    assert "ColA" in out
+    assert "ValA1" in out
+
+def test_csv_parser(sandbox_dir):
+    parser = CsvParser()
+    out = parser.parse(sandbox_dir / "sample.csv")
+    assert "Header1" in out
+    assert "Row1Col1" in out
 
 
 

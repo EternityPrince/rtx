@@ -24,14 +24,16 @@ def test_digger_scanning(sandbox_dir):
     files = list(digger.scan_valid_files())
     filenames = [f.name for f in files]
     
-    # Check we have exactly our 6 valid files
-    assert len(files) == 6
+    # Check we have exactly our 8 valid files (including sample.csv and sample.xlsx)
+    assert len(files) == 8
     assert "calculator.py" in filenames
     assert "readme.md" in filenames
     assert "sample.docx" in filenames
     assert "sample.pptx" in filenames
     assert "sample.pdf" in filenames
     assert "sample.epub" in filenames
+    assert "sample.csv" in filenames
+    assert "sample.xlsx" in filenames
 
 def test_metrics_calculation(sandbox_dir):
     digger = DiggerEngine(sandbox_dir)
@@ -45,7 +47,7 @@ def test_metrics_calculation(sandbox_dir):
     
     # Test directory metrics (which counts all children recursively)
     dir_files, dir_lines, dir_chars, dir_bytes = digger.calculate_metrics(sandbox_dir)
-    assert dir_files == 6
+    assert dir_files == 8
     assert dir_lines > 0
     assert dir_chars > 0
     assert dir_bytes > 0
@@ -57,3 +59,30 @@ def test_format_bytes():
     assert format_bytes(500) == "500 B"
     assert format_bytes(1024) == "1.0 KiB"
     assert format_bytes(1024 * 1024 * 2.5) == "2.5 MiB"
+
+def test_rtxignore(sandbox_dir):
+    ignore_file = sandbox_dir / ".rtxignore"
+    ignore_file.write_text("*.docx\ncalculator.py\n", encoding="utf-8")
+    try:
+        digger = DiggerEngine(sandbox_dir)
+        files = list(digger.scan_valid_files())
+        filenames = [f.name for f in files]
+        assert "calculator.py" not in filenames
+        assert "sample.docx" not in filenames
+        assert "readme.md" in filenames
+    finally:
+        if ignore_file.exists():
+            ignore_file.unlink()
+
+def test_scan_targets(sandbox_dir):
+    digger = DiggerEngine(sandbox_dir)
+    files = list(digger.scan_targets(["calculator.py"]))
+    assert len(files) == 1
+    assert files[0].name == "calculator.py"
+    
+    files_dir = list(digger.scan_targets(["."]))
+    assert len(files_dir) == 8
+    
+    files_glob = list(digger.scan_targets(["*.py"]))
+    assert len(files_glob) == 1
+    assert files_glob[0].name == "calculator.py"

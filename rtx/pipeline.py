@@ -25,85 +25,92 @@ def run_parser_pipeline(
     progress_callback: Optional[Callable[[Path, int, int], None]] = None
 ) -> List[ParseResult]:
     """
-    Runs the parsing pipeline sequentially grouped by extensions:
-    1. PDF (using marker-pdf, then unloading the models to prevent OOM)
-    2. DOCX
-    3. PPTX
-    4. EPUB
-    5. FB2
-    6. Code and Text
+    Runs the parsing pipeline:
+    1. PDF (sequentially using marker-pdf, then unloading the models to prevent OOM)
+    2. Other files (parallelized via ThreadPoolExecutor)
     """
-    pdf_files = []
-    docx_files = []
-    pptx_files = []
-    epub_files = []
-    fb2_files = []
-    code_text_files = []
-    
-    for p in file_paths:
-        suffix = p.suffix.lower()
-        if suffix == ".pdf":
-            pdf_files.append(p)
-        elif suffix == ".docx":
-            docx_files.append(p)
-        elif suffix == ".pptx":
-            pptx_files.append(p)
-        elif suffix == ".epub":
-            epub_files.append(p)
-        elif suffix == ".fb2":
-            fb2_files.append(p)
-        else:
-            code_text_files.append(p)
-            
-    # Execution batches in sequence
-    batches = [
-        ("PDF", pdf_files),
-        ("DOCX", docx_files),
-        ("PPTX", pptx_files),
-        ("EPUB", epub_files),
-        ("FB2", fb2_files),
-        ("Code/Text", code_text_files),
-    ]
-    
     results: List[ParseResult] = []
     total_files = len(file_paths)
     processed_count = 0
     
-    for batch_name, paths in batches:
-        if not paths:
-            continue
-            
-        for path in paths:
-            if progress_callback:
-                progress_callback(path, processed_count, total_files)
-                
+    # 1. Process PDF batch first and sequentially
+    pdf_paths = [p for p in file_paths if p.suffix.lower() == ".pdf"]
+    for path in pdf_paths:
+        if progress_callback:
+            progress_callback(path, processed_count, total_files)
+        import time
+        start_time = time.perf_counter()
+        try:
+            parser = get_parser_for_path(path)
+            markdown_text = parser.parse(path)
+            duration = time.perf_counter() - start_time
+            results.append(ParseResult(
+                path=path,
+                extension=".pdf",
+                text=markdown_text,
+                status="Success",
+                duration=duration
+            ))
+        except Exception as e:
+            duration = time.perf_counter() - start_time
+            results.append(ParseResult(
+                path=path,
+                extension=".pdf",
+                status="Failed",
+                error=str(e),
+                duration=duration
+            ))
+        processed_count += 1
+        
+    clear_marker_models()
+    
+    # 2. Process all other files in parallel using ThreadPoolExecutor
+    other_paths = [p for p in file_paths if p.suffix.lower() != ".pdf"]
+    if other_paths:
+        import threading
+        import os
+        from concurrent.futures import ThreadPoolExecutor
+        
+        lock = threading.Lock()
+        
+        def parse_file(path: Path) -> ParseResult:
+            nonlocal processed_count
             suffix = path.suffix.lower()
+            
+            with lock:
+                current_idx = processed_count
+                processed_count += 1
+                
+            if progress_callback:
+                progress_callback(path, current_idx, total_files)
+                
             import time
             start_time = time.perf_counter()
             try:
                 parser = get_parser_for_path(path)
                 markdown_text = parser.parse(path)
                 duration = time.perf_counter() - start_time
-                results.append(ParseResult(
+                return ParseResult(
                     path=path,
                     extension=suffix,
                     text=markdown_text,
                     status="Success",
                     duration=duration
-                ))
+                )
             except Exception as e:
                 duration = time.perf_counter() - start_time
-                results.append(ParseResult(
+                return ParseResult(
                     path=path,
                     extension=suffix,
                     status="Failed",
                     error=str(e),
                     duration=duration
-                ))
-            processed_count += 1
-            
-        # Clean up marker models immediately after the PDF batch completes to prevent OOM
-        if batch_name == "PDF":
-            clear_marker_models()
+                )
+                
+        # Run in thread pool
+        max_workers = min(32, (os.cpu_count() or 1) + 4)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_results = list(executor.map(parse_file, other_paths))
+            results.extend(future_results)
             
     return results

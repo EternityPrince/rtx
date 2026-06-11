@@ -63,7 +63,7 @@ def test_cli_tui_and_empty_directory_calls(sandbox_dir):
     # Test typer TUI call branch
     runner = CliRunner()
     with patch("rtx.tui.run_tui") as mock_run_tui:
-        result = runner.invoke(app, [str(sandbox_dir), "--tui"])
+        result = runner.invoke(app, ["--path", str(sandbox_dir)])
         assert result.exit_code == 0
         mock_run_tui.assert_called_once()
         
@@ -72,7 +72,7 @@ def test_cli_tui_and_empty_directory_calls(sandbox_dir):
     empty_scan_dir.mkdir(exist_ok=True)
     (empty_scan_dir / "node_modules").mkdir(exist_ok=True)
     
-    result2 = runner.invoke(app, [str(empty_scan_dir)])
+    result2 = runner.invoke(app, ["scan", "--project", str(empty_scan_dir)])
     assert result2.exit_code == 0
     assert "No valid files to process" in result2.output
 

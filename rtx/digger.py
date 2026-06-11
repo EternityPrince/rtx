@@ -1,7 +1,7 @@
 import os
 import gc
 from pathlib import Path
-from typing import Dict, Tuple, Set, Optional, Iterator
+from typing import Dict, Tuple, Set, Optional, Iterator, List
 
 # Excluded directory names
 EXCLUDED_DIR_NAMES = {
@@ -39,7 +39,7 @@ BINARY_EXTENSIONS = {
 
 # Document extensions we explicitly support
 DOCUMENT_EXTENSIONS = {
-    ".pdf", ".docx", ".pptx", ".epub", ".fb2"
+    ".pdf", ".docx", ".pptx", ".epub", ".fb2", ".xlsx", ".csv"
 }
 
 # Programming language code extensions we support (10+ languages)
@@ -47,6 +47,41 @@ CODE_EXTENSIONS = {
     ".py", ".go", ".rs", ".c", ".cpp", ".cc", ".h", ".hpp", ".js", ".jsx", ".ts", ".tsx",
     ".html", ".htm", ".css", ".yaml", ".yml", ".json", ".toml", ".sh", ".bash", ".md"
 }
+
+def load_rtxignore_patterns(root_path: Path) -> List[str]:
+    ignore_path = root_path / ".rtxignore"
+    patterns = []
+    if ignore_path.exists():
+        try:
+            with open(ignore_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        patterns.append(line)
+        except Exception:
+            pass
+    return patterns
+
+def matches_ignore_patterns(path: Path, root_path: Path, patterns: List[str]) -> bool:
+    try:
+        rel_path = path.relative_to(root_path)
+    except ValueError:
+        return False
+        
+    rel_path_str = str(rel_path).replace("\\", "/")
+    import fnmatch
+    for pattern in patterns:
+        pattern = pattern.replace("\\", "/")
+        is_dir_pattern = pattern.endswith("/")
+        clean_pattern = pattern[:-1] if is_dir_pattern else pattern
+        
+        # Check if full path matches or subpath matches
+        if fnmatch.fnmatch(rel_path_str, pattern) or fnmatch.fnmatch(rel_path_str, f"{pattern}/*") or fnmatch.fnmatch(rel_path_str, f"**/{pattern}"):
+            return True
+        for part in rel_path.parts:
+            if fnmatch.fnmatch(part, clean_pattern):
+                return True
+    return False
 
 def is_binary_content(path: Path) -> bool:
     """Check if a file contains binary content by reading the first 1024 bytes."""
@@ -57,12 +92,19 @@ def is_binary_content(path: Path) -> bool:
     except OSError:
         return True
 
-def is_excluded_path(path: Path, root_path: Path) -> bool:
+def is_excluded_path(path: Path, root_path: Path, ignore_patterns: Optional[List[str]] = None) -> bool:
     """
     Determine if a path should be excluded according to the RTX specifications.
     Checks directory names and binary extensions/contents.
     """
     try:
+        # Load ignore patterns if not provided
+        if ignore_patterns is None:
+            ignore_patterns = load_rtxignore_patterns(root_path)
+            
+        if matches_ignore_patterns(path, root_path, ignore_patterns):
+            return True
+            
         # Check if the path itself or any of its parents (relative to root) are in excluded dirs
         try:
             rel_path = path.relative_to(root_path)
@@ -188,6 +230,38 @@ def count_fb2_metrics(path: Path) -> Tuple[int, int]:
     except Exception:
         return 0, 0
 
+def count_csv_metrics(path: Path) -> Tuple[int, int]:
+    """Calculate lines and characters for a CSV file."""
+    try:
+        import csv
+        lines = 0
+        chars = 0
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            reader = csv.reader(f)
+            for row in reader:
+                lines += 1
+                chars += sum(len(cell) for cell in row) + len(row) - 1
+        return lines, chars
+    except Exception:
+        return 0, 0
+
+def count_xlsx_metrics(path: Path) -> Tuple[int, int]:
+    """Calculate lines and characters for an XLSX file."""
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        lines = 0
+        chars = 0
+        for sheet in wb.worksheets:
+            # Iterate through rows and count values
+            for row in sheet.iter_rows(values_only=True):
+                if any(v is not None for v in row):
+                    lines += 1
+                    chars += sum(len(str(v)) for v in row if v is not None)
+        return lines, chars
+    except Exception:
+        return 0, 0
+
 def get_file_metrics(path: Path) -> Tuple[int, int, int]:
     """
     Calculate metrics for a single file: (Lines, Chars, Bytes).
@@ -203,6 +277,10 @@ def get_file_metrics(path: Path) -> Tuple[int, int, int]:
         lines, chars = count_pdf_metrics(path)
     elif suffix == ".docx":
         lines, chars = count_docx_metrics(path)
+    elif suffix == ".xlsx":
+        lines, chars = count_xlsx_metrics(path)
+    elif suffix == ".csv":
+        lines, chars = count_csv_metrics(path)
     elif suffix == ".pptx":
         lines, chars = count_pptx_metrics(path)
     elif suffix == ".epub":
@@ -225,6 +303,7 @@ class DiggerEngine:
     def __init__(self, root_path: Path):
         self.root_path = root_path.resolve()
         self.metrics_cache: Dict[Path, Tuple[int, int, int, int]] = {}  # Path -> (Files, Lines, Chars, Bytes)
+        self.ignore_patterns = load_rtxignore_patterns(self.root_path)
 
     def scan_valid_files(self, start_dir: Optional[Path] = None) -> Iterator[Path]:
         """Generator yielding all valid (non-excluded) files under the directory."""
@@ -237,13 +316,49 @@ class DiggerEngine:
             # We must iterate over a copy of dirnames since we modify it in-place
             for dirname in list(dirnames):
                 sub_dir = path_dir / dirname
-                if is_excluded_path(sub_dir, self.root_path):
+                if is_excluded_path(sub_dir, self.root_path, self.ignore_patterns):
                     dirnames.remove(dirname)
 
             for filename in filenames:
                 file_path = path_dir / filename
-                if not is_excluded_path(file_path, self.root_path):
+                if not is_excluded_path(file_path, self.root_path, self.ignore_patterns):
                     yield file_path
+
+    def scan_targets(self, targets: List[str]) -> Iterator[Path]:
+        """
+        Scans target paths or glob patterns, returning an iterator of valid file paths.
+        Supports files, directories, and wildcards.
+        """
+        if not targets:
+            yield from self.scan_valid_files()
+            return
+
+        for target in targets:
+            if "*" in target:
+                # Glob pattern (e.g. *.py, src/*.go, etc.)
+                if target.startswith("*."):
+                    pattern = f"**/{target}"
+                elif "/**/" in target:
+                    pattern = target
+                else:
+                    pattern = target
+                
+                for p in self.root_path.glob(pattern):
+                    p_resolved = p.resolve()
+                    if p_resolved.is_file() and not is_excluded_path(p_resolved, self.root_path, self.ignore_patterns):
+                        yield p_resolved
+            else:
+                target_path = Path(target)
+                if not target_path.is_absolute():
+                    target_path = (self.root_path / target_path).resolve()
+                else:
+                    target_path = target_path.resolve()
+
+                if target_path.is_dir():
+                    yield from self.scan_valid_files(start_dir=target_path)
+                elif target_path.is_file():
+                    if not is_excluded_path(target_path, self.root_path, self.ignore_patterns):
+                        yield target_path
 
     def calculate_metrics(self, path: Path) -> Tuple[int, int, int, int]:
         """
@@ -257,7 +372,7 @@ class DiggerEngine:
             return self.metrics_cache[path]
 
         if path.is_file():
-            if is_excluded_path(path, self.root_path):
+            if is_excluded_path(path, self.root_path, self.ignore_patterns):
                 metrics = (0, 0, 0, 0)
             else:
                 lines, chars, bytes_size = get_file_metrics(path)
@@ -275,7 +390,7 @@ class DiggerEngine:
         try:
             for entry in os.scandir(path):
                 entry_path = Path(entry.path)
-                if is_excluded_path(entry_path, self.root_path):
+                if is_excluded_path(entry_path, self.root_path, self.ignore_patterns):
                     continue
 
                 if entry.is_file():
