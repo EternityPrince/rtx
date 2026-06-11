@@ -27,14 +27,20 @@ async def test_tui_startup_and_bindings(sandbox_dir):
         
         # Verify preview updates for a directory
         app.show_preview(sandbox_dir)
-        await pilot.pause()
+        for _ in range(50):
+            await pilot.pause(0.05)
+            if "Folder:" in str(app.query_one("#preview_content").content):
+                break
         assert "Folder:" in str(app.query_one("#preview_content").content)
         assert app.query_one("#open_file_btn").disabled is True
 
         # Verify preview updates for a file
         calc_file = sandbox_dir / "calculator.py"
         app.show_preview(calc_file)
-        await pilot.pause()
+        for _ in range(50):
+            await pilot.pause(0.05)
+            if "def add" in str(app.query_one("#preview_content").content):
+                break
         assert "def add" in str(app.query_one("#preview_content").content)
         assert app.query_one("#open_file_btn").disabled is False
 

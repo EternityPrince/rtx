@@ -4,12 +4,13 @@ from typing import List, Dict, Tuple, Any, Callable, Optional
 from rtx.parsers import get_parser_for_path, clear_marker_models
 
 class ParseResult:
-    def __init__(self, path: Path, extension: str, text: str = "", status: str = "Success", error: str = ""):
+    def __init__(self, path: Path, extension: str, text: str = "", status: str = "Success", error: str = "", duration: float = 0.0):
         self.path = path
         self.extension = extension
         self.text = text
         self.status = status  # "Success" or "Failed"
         self.error = error
+        self.duration = duration
         
         # Calculate metrics of the extracted markdown content
         if status == "Success":
@@ -77,21 +78,27 @@ def run_parser_pipeline(
                 progress_callback(path, processed_count, total_files)
                 
             suffix = path.suffix.lower()
+            import time
+            start_time = time.perf_counter()
             try:
                 parser = get_parser_for_path(path)
                 markdown_text = parser.parse(path)
+                duration = time.perf_counter() - start_time
                 results.append(ParseResult(
                     path=path,
                     extension=suffix,
                     text=markdown_text,
-                    status="Success"
+                    status="Success",
+                    duration=duration
                 ))
             except Exception as e:
+                duration = time.perf_counter() - start_time
                 results.append(ParseResult(
                     path=path,
                     extension=suffix,
                     status="Failed",
-                    error=str(e)
+                    error=str(e),
+                    duration=duration
                 ))
             processed_count += 1
             

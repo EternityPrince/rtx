@@ -13,8 +13,13 @@ def get_marker_models():
     global _marker_models
     if _marker_models is None:
         # Lazy imports for heavy ML libraries
-        from marker.models import load_all_models
-        _marker_models = load_all_models()
+        import os
+        import sys
+        from contextlib import redirect_stdout, redirect_stderr
+        with open(os.devnull, "w") as fnull:
+            with redirect_stdout(fnull), redirect_stderr(fnull):
+                from marker.models import create_model_dict
+                _marker_models = create_model_dict()
     return _marker_models
 
 def clear_marker_models():
@@ -55,9 +60,17 @@ class PdfParser(BaseParser):
     def parse(self, path: Path) -> str:
         # 1. Attempt marker-pdf parsing
         try:
-            from marker.convert import convert_single_pdf
+            import os
+            import sys
+            from contextlib import redirect_stdout, redirect_stderr
+            from marker.converters.pdf import PdfConverter
+            
             models = get_marker_models()
-            full_text, _, _ = convert_single_pdf(str(path.resolve()), models)
+            with open(os.devnull, "w") as fnull:
+                with redirect_stdout(fnull), redirect_stderr(fnull):
+                    converter = PdfConverter(artifact_dict=models)
+                    rendered = converter(str(path.resolve()))
+                    full_text = rendered.markdown
             if full_text and full_text.strip():
                 return full_text.strip()
         except Exception as e:

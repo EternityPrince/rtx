@@ -197,7 +197,7 @@ def test_pptx_parser_edge_cases(sandbox_dir):
 
 def test_pdf_models_caching_and_cleanup():
     mock_models = MagicMock()
-    mock_models.load_all_models.return_value = "mocked_models"
+    mock_models.create_model_dict.return_value = "mocked_models"
     
     with patch.dict(sys.modules, {"marker.models": mock_models}):
         # Force cache reload by resetting module global
@@ -228,11 +228,17 @@ def test_pdf_models_caching_and_cleanup():
 
 def test_pdf_parser_marker_success(sandbox_dir):
     mock_models = MagicMock()
-    mock_models.load_all_models.return_value = "mock_models"
-    mock_convert = MagicMock()
-    mock_convert.convert_single_pdf.return_value = ("Marker Parsed Text", None, None)
+    mock_models.create_model_dict.return_value = "mock_models"
+    mock_converter_inst = MagicMock()
+    mock_rendered = MagicMock()
+    mock_rendered.markdown = "Marker Parsed Text"
+    mock_converter_inst.return_value = mock_rendered
+    mock_converter_class = MagicMock(return_value=mock_converter_inst)
     
-    with patch.dict(sys.modules, {"marker.models": mock_models, "marker.convert": mock_convert}):
+    with patch.dict(sys.modules, {
+        "marker.models": mock_models,
+        "marker.converters.pdf": MagicMock(PdfConverter=mock_converter_class)
+    }):
         with patch("rtx.parsers.pdf._marker_models", None):
             parser = PdfParser()
             text = parser.parse(sandbox_dir / "sample.pdf")
@@ -379,52 +385,54 @@ def test_writer_gitignore_and_copy_exceptions(sandbox_dir):
 async def test_tui_interactive_actions(sandbox_dir):
     from rtx.tui import RtxApp, ParsingScreen
     from textual.widgets import Input, Button
+    from unittest.mock import patch
     
-    app = RtxApp(sandbox_dir)
-    
-    async with app.run_test() as pilot:
-        # Toggle mirror mode using keyboard
-        await pilot.press("m")
-        assert app.mirror_mode is True
-        await pilot.press("m")
-        assert app.mirror_mode is False
+    with patch("rtx.parsers.pdf.PdfParser.parse", return_value="Mocked PDF Content"):
+        app = RtxApp(sandbox_dir)
         
-        # Test input path updates
-        await pilot.click("#output_path_input")
-        app.query_one("#output_path_input", Input).value = "tui_results.md"
-        await pilot.press("enter")
-        assert app.output_file == Path("tui_results.md")
-        
-        # Clear output path
-        app.query_one("#output_path_input", Input).value = ""
-        await pilot.press("enter")
-        assert app.output_file is None
-        
-        # Select files using toggle action on current node (root)
-        app.action_toggle_select()
-        assert len(app.selected_paths) > 0
-        
-        # Trigger parsing modal screen
-        app.action_start_parsing()
-        await pilot.pause()
-        
-        # Assert modal is mounted
-        assert isinstance(app.screen, ParsingScreen)
-        
-        # Wait for background thread parsing to finish
-        await pilot.pause(2.5)
-        
-        # Close button should be enabled/visible now
-        close_btn = app.screen.query_one("#close_btn", Button)
-        assert "hidden" not in close_btn.classes
-        
-        # Click close to return to tree
-        await pilot.click("#close_btn")
-        await pilot.pause()
-        assert not isinstance(app.screen, ParsingScreen)
-        
-        # Quit TUI
-        await pilot.press("q")
+        async with app.run_test() as pilot:
+            # Toggle mirror mode using keyboard
+            await pilot.press("m")
+            assert app.mirror_mode is True
+            await pilot.press("m")
+            assert app.mirror_mode is False
+            
+            # Test input path updates
+            await pilot.click("#output_path_input")
+            app.query_one("#output_path_input", Input).value = "tui_results.md"
+            await pilot.press("enter")
+            assert app.output_file == Path("tui_results.md")
+            
+            # Clear output path
+            app.query_one("#output_path_input", Input).value = ""
+            await pilot.press("enter")
+            assert app.output_file is None
+            
+            # Select files using toggle action on current node (root)
+            app.action_toggle_select()
+            assert len(app.selected_paths) > 0
+            
+            # Trigger parsing modal screen
+            app.action_start_parsing()
+            await pilot.pause()
+            
+            # Assert modal is mounted
+            assert isinstance(app.screen, ParsingScreen)
+            
+            # Wait for background thread parsing to finish
+            await pilot.pause(0.5)
+            
+            # Close button should be enabled/visible now
+            close_btn = app.screen.query_one("#close_btn", Button)
+            assert "hidden" not in close_btn.classes
+            
+            # Click close to return to tree
+            await pilot.click("#close_btn")
+            await pilot.pause()
+            assert not isinstance(app.screen, ParsingScreen)
+            
+            # Quit TUI
+            await pilot.press("q")
 
 @pytest.mark.asyncio
 async def test_tui_widget_coverage(sandbox_dir):

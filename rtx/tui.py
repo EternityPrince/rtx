@@ -149,16 +149,18 @@ class ParsingScreen(ModalScreen):
         table.add_column("File Count", justify="right")
         table.add_column("Lines Extracted", justify="right")
         table.add_column("Characters Extracted", justify="right")
+        table.add_column("Time Elapsed", justify="right")
         table.add_column("Status", justify="center")
         
         stats = {}
         for res in results:
             ext = res.extension.lower() or "no_ext"
             if ext not in stats:
-                stats[ext] = {"count": 0, "lines": 0, "chars": 0, "success": 0, "failed": 0}
+                stats[ext] = {"count": 0, "lines": 0, "chars": 0, "success": 0, "failed": 0, "duration": 0.0}
             stats[ext]["count"] += 1
             stats[ext]["lines"] += res.lines
             stats[ext]["chars"] += res.chars
+            stats[ext]["duration"] += getattr(res, "duration", 0.0)
             if res.status == "Success":
                 stats[ext]["success"] += 1
             else:
@@ -181,6 +183,7 @@ class ParsingScreen(ModalScreen):
                 str(total),
                 f"{s['lines']:,}",
                 f"{s['chars']:,}",
+                f"{s['duration']:.2f}s",
                 status_str
             )
             

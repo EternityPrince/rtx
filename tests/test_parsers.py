@@ -85,7 +85,8 @@ def test_pdf_parser_fallbacks(sandbox_dir, monkeypatch):
     
     # Force marker to be treated as missing/import failure
     monkeypatch.setitem(sys.modules, "marker", None)
-    monkeypatch.setitem(sys.modules, "marker.convert", None)
+    monkeypatch.setitem(sys.modules, "marker.converters.pdf", None)
+    monkeypatch.setitem(sys.modules, "marker.models", None)
     
     # Capture calls to logger.debug
     debug_calls = []
