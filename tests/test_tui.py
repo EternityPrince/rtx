@@ -139,3 +139,23 @@ async def test_tui_already_indexed_pdf(sandbox_dir):
             shutil.rmtree(rtx_dir)
 
 
+@pytest.mark.asyncio
+async def test_tui_vim_navigation(sandbox_dir):
+    app = RtxApp(sandbox_dir)
+    async with app.run_test() as pilot:
+        # Check initial focus
+        tree = app.query_one("#dir_tree")
+        assert app.focused == tree
+        
+        # Test Vim focus preview (Shift+L / L)
+        await pilot.press("shift+l")
+        await pilot.pause()
+        assert app.focused != tree
+        
+        # Test Vim focus tree (Shift+H / H)
+        await pilot.press("shift+h")
+        await pilot.pause()
+        assert app.focused == tree
+
+
+

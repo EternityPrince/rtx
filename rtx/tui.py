@@ -24,10 +24,20 @@ class PreviewArea(Static):
     BINDINGS = [
         ("up", "scroll_up", "Scroll Up"),
         ("down", "scroll_down", "Scroll Down"),
+        ("k", "scroll_up", "Scroll Up"),
+        ("j", "scroll_down", "Scroll Down"),
         ("pageup", "page_up", "Page Up"),
         ("pagedown", "page_down", "Page Down"),
+        ("ctrl+b", "page_up", "Page Up"),
+        ("ctrl+f", "page_down", "Page Down"),
+        ("ctrl+u", "page_up", "Page Up"),
+        ("ctrl+d", "page_down", "Page Down"),
+        ("u", "page_up", "Page Up"),
+        ("d", "page_down", "Page Down"),
         ("home", "scroll_home", "Home"),
         ("end", "scroll_end", "End"),
+        ("g", "scroll_home", "Home"),
+        ("G", "scroll_end", "End"),
     ]
 
 class PreviewMarkdown(Markdown):
@@ -36,16 +46,63 @@ class PreviewMarkdown(Markdown):
     BINDINGS = [
         ("up", "scroll_up", "Scroll Up"),
         ("down", "scroll_down", "Scroll Down"),
+        ("k", "scroll_up", "Scroll Up"),
+        ("j", "scroll_down", "Scroll Down"),
         ("pageup", "page_up", "Page Up"),
         ("pagedown", "page_down", "Page Down"),
+        ("ctrl+b", "page_up", "Page Up"),
+        ("ctrl+f", "page_down", "Page Down"),
+        ("ctrl+u", "page_up", "Page Up"),
+        ("ctrl+d", "page_down", "Page Down"),
+        ("u", "page_up", "Page Up"),
+        ("d", "page_down", "Page Down"),
         ("home", "scroll_home", "Home"),
         ("end", "scroll_end", "End"),
+        ("g", "scroll_home", "Home"),
+        ("G", "scroll_end", "End"),
     ]
 
 class RtxDirectoryTree(DirectoryTree):
+    BINDINGS = [
+        ("k", "cursor_up", "Cursor Up"),
+        ("j", "cursor_down", "Cursor Down"),
+        ("h", "tree_left", "Collapse/Parent"),
+        ("l", "tree_right", "Expand/Child"),
+    ]
+
     def __init__(self, root: Path, project_path: Path, **kwargs):
         self.project_path = project_path
         super().__init__(root, **kwargs)
+
+    def action_tree_left(self) -> None:
+        node = self.cursor_node
+        if node is None:
+            return
+        
+        # If it's a directory and expanded, collapse it
+        if node.allow_expand and node.is_expanded:
+            node.collapse()
+        else:
+            # Otherwise, move cursor to the parent node
+            parent = node.parent
+            if parent is not None:
+                # If parent is root and root is hidden, do not move
+                if parent == self.root and not self.show_root:
+                    return
+                self.move_cursor(parent)
+
+    def action_tree_right(self) -> None:
+        node = self.cursor_node
+        if node is None:
+            return
+        
+        # If it's a directory and collapsed, expand it
+        if node.allow_expand and not node.is_expanded:
+            node.expand()
+        else:
+            # Otherwise, move to the first child if it exists
+            if node.children:
+                self.move_cursor(node.children[0])
 
     def render_label(self, node: TreeNode[DirEntry], base_style, style) -> Text:
         # Get the standard label
@@ -63,7 +120,7 @@ class RtxDirectoryTree(DirectoryTree):
                     sz = path.stat().st_size
                     text.append(f" ({format_bytes(sz)})", style="dim")
                 except Exception:
-                    pass
+                     pass
             
             # 2. Prepend checkboxes based on selection state
             prefix = "⬜ "
@@ -263,12 +320,21 @@ class RtxApp(App):
         ("p", "start_parsing", "Parse"),
         ("o", "open_file", "Open File"),
         ("r", "reload", "Reload"),
+        
         ("shift+up", "scroll_preview_up", "Preview Up"),
         ("shift+down", "scroll_preview_down", "Preview Down"),
+        ("shift+k", "scroll_preview_up", "Preview Up"),
+        ("shift+j", "scroll_preview_down", "Preview Down"),
+        
         ("shift+pageup", "scroll_preview_page_up", "Preview PgUp"),
         ("shift+pagedown", "scroll_preview_page_down", "Preview PgDn"),
+        ("ctrl+u", "scroll_preview_page_up", "Preview PgUp"),
+        ("ctrl+d", "scroll_preview_page_down", "Preview PgDn"),
+        
         ("shift+left", "focus_tree", "Focus Tree"),
         ("shift+right", "focus_preview", "Focus Preview"),
+        ("shift+h", "focus_tree", "Focus Tree"),
+        ("shift+l", "focus_preview", "Focus Preview"),
     ]
     
     CSS = """
@@ -504,9 +570,10 @@ class RtxApp(App):
             "  [bold]Enter[/bold]        - Expand / Collapse folder",
             "  [bold]M[/bold]            - Toggle Mode (Mirror / Stream)",
             "  [bold]Ctrl+P[/bold]       - Start Parsing",
-            "  [bold]Shift+L/R[/bold]    - Focus Tree / Preview",
-            "  [bold]Shift+Up/Dn[/bold]  - Scroll Preview (line)",
-            "  [bold]Shift+PgU/D[/bold]  - Scroll Preview (page)",
+            "  [bold]Shift+H/L[/bold]    - Focus Tree / Preview (or Shift+L/R)",
+            "  [bold]h / j / k / l[/bold]  - Vim navigation in Tree",
+            "  [bold]j / k[/bold]          - Vim scroll in Preview",
+            "  [bold]Ctrl+U/D[/bold]     - Vim scroll page in Preview",
             "  [bold]Q[/bold]            - Quit\n",
             "[bold underline]Selected Files:[/bold underline]"
         ]
@@ -810,8 +877,16 @@ class RtxApp(App):
 
             # Default text/code preview
             try:
+                # If file size is larger than 500KB, limit bat output to 10,000 lines for responsiveness.
+                # Otherwise, display the entire file.
+                line_range = ":10000" if path.stat().st_size > 500 * 1024 else None
+                cmd = ['bat', '--color=always', '--style=numbers']
+                if line_range:
+                    cmd.extend(['--line-range', line_range])
+                cmd.append(str(path))
+
                 res = subprocess.run(
-                    ['bat', '--color=always', '--style=numbers', '--line-range', ':300', str(path)],
+                    cmd,
                     capture_output=True,
                     text=True,
                     timeout=2.0
@@ -827,7 +902,9 @@ class RtxApp(App):
             try:
                 lines = []
                 with open(path, 'r', encoding='utf-8', errors='replace') as f:
-                    for _ in range(300):
+                    # Limit fallback to 10,000 lines for larger files, otherwise show up to 100,000 lines
+                    max_lines = 10000 if path.stat().st_size > 500 * 1024 else 100000
+                    for _ in range(max_lines):
                         line = f.readline()
                         if not line:
                             break
