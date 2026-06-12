@@ -119,5 +119,55 @@ def test_csv_parser(sandbox_dir):
     assert "Header1" in out
     assert "Row1Col1" in out
 
+def test_pdf_image_extraction_pymupdf(sandbox_dir, monkeypatch):
+    import sys
+    # Force marker to fail so it falls back to PyMuPDF
+    monkeypatch.setitem(sys.modules, "marker", None)
+    monkeypatch.setitem(sys.modules, "marker.converters.pdf", None)
+    monkeypatch.setitem(sys.modules, "marker.models", None)
+    
+    from rtx.parsers.pdf import PdfParser
+    parser = PdfParser()
+    out = parser.parse(sandbox_dir / "sample.pdf")
+    
+    assert "Hello PDF World" in out
+    assert "![][image_" in out
+    assert "data:image/jpeg;base64," in out
 
+def test_pdf_image_extraction_pypdf(sandbox_dir, monkeypatch):
+    import sys
+    # Force marker and PyMuPDF to fail so it falls back to pypdf
+    monkeypatch.setitem(sys.modules, "marker", None)
+    monkeypatch.setitem(sys.modules, "marker.converters.pdf", None)
+    monkeypatch.setitem(sys.modules, "marker.models", None)
+    monkeypatch.setitem(sys.modules, "fitz", None)
+    
+    from rtx.parsers.pdf import PdfParser
+    parser = PdfParser()
+    out = parser.parse(sandbox_dir / "sample.pdf")
+    
+    assert "Hello PDF World" in out
+    assert "![][image_" in out
+    assert "data:image/jpeg;base64," in out
 
+def test_process_and_compress_image():
+    from rtx.parsers.pdf import process_and_compress_image
+    from PIL import Image
+    
+    # 1. Test process_and_compress_image with a small RGB image
+    img = Image.new("RGB", (200, 200), color="blue")
+    uri = process_and_compress_image(img, max_dim=100)
+    assert uri.startswith("data:image/jpeg;base64,")
+    
+    # Check that image was resized
+    import base64
+    import io
+    header, encoded = uri.split(",", 1)
+    data = base64.b64decode(encoded)
+    decoded_img = Image.open(io.BytesIO(data))
+    assert max(decoded_img.size) == 100
+    
+    # 2. Test with RGBA image (transparency conversion to RGB on white background)
+    img_rgba = Image.new("RGBA", (150, 150), color=(0, 255, 0, 128))
+    uri_rgba = process_and_compress_image(img_rgba)
+    assert uri_rgba.startswith("data:image/jpeg;base64,")

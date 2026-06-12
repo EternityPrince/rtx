@@ -36,9 +36,19 @@ def sandbox_dir(tmp_path):
 
     # 5. Create a PDF file using PyMuPDF (fitz)
     import fitz
+    from PIL import Image
+    import io
     doc_pdf = fitz.open()
     page = doc_pdf.new_page()
     page.insert_text((50, 50), "Hello PDF World from RTX Parser!", fontsize=14)
+    
+    # Create a simple red image
+    img = Image.new("RGB", (100, 100), color="red")
+    img_bytes = io.BytesIO()
+    img.save(img_bytes, format="PNG")
+    
+    # Insert image on the page
+    page.insert_image(fitz.Rect(100, 100, 200, 200), stream=img_bytes.getvalue())
     doc_pdf.save(tmp_path / "sample.pdf")
 
     # 6. Create an EPUB file using ebooklib

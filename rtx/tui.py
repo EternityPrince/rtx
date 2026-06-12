@@ -30,6 +30,18 @@ class PreviewArea(Static):
         ("end", "scroll_end", "End"),
     ]
 
+class PreviewMarkdown(Markdown):
+    can_focus = True
+
+    BINDINGS = [
+        ("up", "scroll_up", "Scroll Up"),
+        ("down", "scroll_down", "Scroll Down"),
+        ("pageup", "page_up", "Page Up"),
+        ("pagedown", "page_down", "Page Down"),
+        ("home", "scroll_home", "Home"),
+        ("end", "scroll_end", "End"),
+    ]
+
 class RtxDirectoryTree(DirectoryTree):
     def __init__(self, root: Path, project_path: Path, **kwargs):
         self.project_path = project_path
@@ -251,6 +263,12 @@ class RtxApp(App):
         ("p", "start_parsing", "Parse"),
         ("o", "open_file", "Open File"),
         ("r", "reload", "Reload"),
+        ("shift+up", "scroll_preview_up", "Preview Up"),
+        ("shift+down", "scroll_preview_down", "Preview Down"),
+        ("shift+pageup", "scroll_preview_page_up", "Preview PgUp"),
+        ("shift+pagedown", "scroll_preview_page_down", "Preview PgDn"),
+        ("shift+left", "focus_tree", "Focus Tree"),
+        ("shift+right", "focus_preview", "Focus Preview"),
     ]
     
     CSS = """
@@ -422,7 +440,7 @@ class RtxApp(App):
                         id="preview_header"
                     ),
                     PreviewArea("(select a file to preview)", id="preview_content"),
-                    Markdown(id="preview_markdown", classes="hidden"),
+                    PreviewMarkdown(id="preview_markdown", classes="hidden"),
                     id="preview_container"
                 ),
                 id="right_panel"
@@ -482,11 +500,14 @@ class RtxApp(App):
             f"Characters: [bold]{total_chars:,}[/bold]",
             f"Est. Tokens: [bold]{total_tokens:,}[/bold]\n",
             "[bold underline]Keyboard Shortcuts[/bold underline]",
-            "  [bold]X[/bold]      - Select / Deselect",
-            "  [bold]Enter[/bold]  - Expand / Collapse folder",
-            "  [bold]M[/bold]      - Toggle Mode (Mirror / Stream)",
-            "  [bold]Ctrl+P[/bold] - Start Parsing",
-            "  [bold]Q[/bold]      - Quit\n",
+            "  [bold]X[/bold]            - Select / Deselect",
+            "  [bold]Enter[/bold]        - Expand / Collapse folder",
+            "  [bold]M[/bold]            - Toggle Mode (Mirror / Stream)",
+            "  [bold]Ctrl+P[/bold]       - Start Parsing",
+            "  [bold]Shift+L/R[/bold]    - Focus Tree / Preview",
+            "  [bold]Shift+Up/Dn[/bold]  - Scroll Preview (line)",
+            "  [bold]Shift+PgU/D[/bold]  - Scroll Preview (page)",
+            "  [bold]Q[/bold]            - Quit\n",
             "[bold underline]Selected Files:[/bold underline]"
         ]
         
@@ -590,6 +611,41 @@ class RtxApp(App):
         tree = self.query_one(RtxDirectoryTree)
         tree.reload()
         self.notify("Workspace reloaded and caches cleared.")
+
+    def action_scroll_preview_up(self) -> None:
+        self.scroll_preview("up")
+
+    def action_scroll_preview_down(self) -> None:
+        self.scroll_preview("down")
+
+    def action_scroll_preview_page_up(self) -> None:
+        self.scroll_preview("page_up")
+
+    def action_scroll_preview_page_down(self) -> None:
+        self.scroll_preview("page_down")
+
+    def scroll_preview(self, direction: str) -> None:
+        content_widget = self.query_one("#preview_content", PreviewArea)
+        markdown_widget = self.query_one("#preview_markdown", PreviewMarkdown)
+        widget = markdown_widget if "hidden" not in markdown_widget.classes else content_widget
+        
+        if direction == "up":
+            widget.scroll_up(animate=False)
+        elif direction == "down":
+            widget.scroll_down(animate=False)
+        elif direction == "page_up":
+            widget.scroll_page_up(animate=False)
+        elif direction == "page_down":
+            widget.scroll_page_down(animate=False)
+
+    def action_focus_tree(self) -> None:
+        self.query_one(RtxDirectoryTree).focus()
+
+    def action_focus_preview(self) -> None:
+        content_widget = self.query_one("#preview_content", PreviewArea)
+        markdown_widget = self.query_one("#preview_markdown", PreviewMarkdown)
+        widget = markdown_widget if "hidden" not in markdown_widget.classes else content_widget
+        widget.focus()
 
     @on(Button.Pressed, "#open_file_btn")
     def handle_open_file_pressed(self) -> None:
@@ -800,7 +856,7 @@ class RtxApp(App):
         try:
             self.query_one("#preview_title", Label).update(f"Preview: {title}")
             content_widget = self.query_one("#preview_content", PreviewArea)
-            markdown_widget = self.query_one("#preview_markdown", Markdown)
+            markdown_widget = self.query_one("#preview_markdown", PreviewMarkdown)
             
             if is_markdown:
                 content_widget.add_class("hidden")
